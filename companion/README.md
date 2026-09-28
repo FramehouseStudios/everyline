@@ -40,18 +40,21 @@ BoothStream  --Cue Stream Protocol v0-->  BoothClock  -->  CuePlayer  -->  LensR
   seeks, loops, and pause/resume need no special cases.
 - `src/renderer.js` — **the Meta seam.** `LensRenderer` is four methods:
   `showCue`, `clear`, `setStatus`, `setLang`. `WebRenderer` implements them
-  with DOM; `ios/MetaDisplayRenderer.swift` implements them against the
-  Wearables DAT Display capability (MWDATDisplay, SDK 0.7.0; uncompiled —
-  needs Xcode). Nothing above this file changes.
+  with DOM; `ios/Sources/EverylineDisplay/` implements them against the
+  Wearables DAT Display capability (SDK 1.0.0; open `ios/Package.swift` in
+  Xcode to build — see `ios/README.md`). Nothing above this file changes.
 - `src/app.js` — screens and wiring only.
 
 ## On real glasses: two paths
 
-1. **Native (Swift).** `ios/MetaDisplayRenderer.swift` drives the Display
-   capability directly: connect → `addDisplay()` → wait `.started` →
-   `send(FlexBox { Text(cue) })` on cue boundaries. Needs the DAT SDK via
-   SPM, a Wearables Developer Center project for production, and Xcode to
-   compile. Distribution to glasses users is invite-gated by Meta.
+1. **Native (Swift).** `ios/Sources/EverylineDisplay/` drives the Display
+   capability directly: connect → `addDisplay()` → `start()` → wait
+   `.started` → `send(FlexBox { Text(cue) })` on cue boundaries.
+   `MockDisplayPreview.swift` boots a simulated glasses so the renderer
+   runs in the iOS Simulator with no hardware. Open `ios/Package.swift`
+   in Xcode; the DAT SDK resolves via SPM. Production needs a Wearables
+   Developer Center project, and distribution to glasses users is
+   invite-gated by Meta.
 2. **Web app (no native code).** This PWA can render *on the glasses*
    directly as a Meta web app:
    `fb-viewapp://web_app_deep_link?appName=everyline&appUrl=<encoded-companion-url>`

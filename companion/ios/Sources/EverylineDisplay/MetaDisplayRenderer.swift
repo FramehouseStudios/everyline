@@ -6,19 +6,24 @@
 // (showCue / clear / setStatus / setLang), but draws on the glasses through
 // the Wearables Device Access Toolkit's Display capability instead of the DOM.
 //
-// Written against the Wearables DAT iOS SDK 0.7.0 Display capability API as
-// documented in Meta's own display-access skill and the DisplayAccess sample
-// app (see research/meta-display-sdk.md). NOT compiled: there is no Xcode on
-// the machine this was written on. Build it in Xcode against the DAT SDK
-// before trusting it; fix what the compiler says.
+// Written against the Wearables DAT iOS SDK 1.0.0 Display capability API.
+// Every symbol in this file was verified against Meta's own display-access
+// skill and the DisplayAccess sample app (see research/meta-display-sdk.md
+// and the vendored SDK copy): session lifecycle, state streams, the Display
+// DSL, and the listener-token rules all match. NOT compiled: there is no
+// Xcode on the machine this was written on. The first Xcode build is the
+// source of truth; fix what the compiler says.
 //
 // API notes (all from Meta's public material):
 // - Each display.send(_:) REPLACES the previous screen content, so caption
 //   updates are just re-sends. We only send on cue boundaries, never per tick.
 // - The root view of a send must be a FlexBox (UI) or VideoPlayer (video);
 //   never a bare Text.
-// - Wait for DisplayState.started on display.statePublisher before sending
-//   user content; keep the listener token alive.
+// - Call capability.start() BEFORE waiting for DisplayState.started; the
+//   display only reports .started after start.
+// - Keep the statePublisher listener token alive for the session's life;
+//   dropping it stops the listener.
+// - Observe session.errorStream(); async session failures arrive there.
 // - SwiftUI name clash: the DSL's Text/Button/Image live in MWDATDisplay,
 //   so qualify them when SwiftUI is imported in the same file.
 //
@@ -34,15 +39,15 @@ import MWDATDisplay
 
 /// Owns the DAT session + Display capability for one pair of glasses.
 /// Mirrors the DisplayAccess sample's lifecycle: select a display-capable
-/// device, start the session, addDisplay(), wait for .started.
+/// device, start the session, addDisplay(), start(), wait for .started.
 @MainActor
 final class DisplaySession {
-    enum ConnectError: Error { case noSession }
-
     private let wearables = Wearables.shared
     private var deviceSession: DeviceSession?
     private var display: Display?
-    private var stateToken: Any?
+    private var stateToken: AnyListenerToken?
+    private var sessionErrorTask: Task<Void, Never>?
+    private(set) var sessionError: DeviceSessionError?
 
     /// Connect and return a ready Display. Throws DeviceSessionError.
     func connect() async throws -> Display {
@@ -52,28 +57,54 @@ final class DisplaySession {
         )
         let session = try wearables.createSession(deviceSelector: selector)
         self.deviceSession = session
-        try session.start()
-        for await state in session.stateStream() {
-            if state == .started { break }
+
+        // Surface async session failures instead of hanging silently.
+        sessionErrorTask = Task { [weak self] in
+            for await error in session.errorStream() {
+                self?.sessionError = error
+            }
         }
+
+        // Arm the state waiter BEFORE start(), like the sample does.
+        let sessionStarted = Task {
+            for await state in session.stateStream() {
+                if state == .started { return }
+            }
+        }
+        do {
+            try session.start()
+            await sessionStarted.value
+        } catch {
+            sessionStarted.cancel()
+            throw error
+        }
+
         let capability = try session.addDisplay()
         self.display = capability
-        // Wait for the display itself to report .started before sending.
+        // Keep the token alive for the life of the session; dropping it
+        // stops the listener.
         let ready = AsyncStream<DisplayState>.makeStream()
         stateToken = capability.statePublisher.listen { state in
-            if state == .started { ready.continuation.yield(state) }
+            ready.continuation.yield(state)
         }
-        for await _ in ready.stream { break }
+        // start() FIRST: the display only reports .started after start.
         capability.start()
+        for await state in ready.stream {
+            if state == .started { break }
+        }
+        ready.continuation.finish()
         return capability
     }
 
-    func disconnect() async {
+    func disconnect() {
+        sessionErrorTask?.cancel()
+        sessionErrorTask = nil
+        stateToken = nil
         display?.stop()
         deviceSession?.stop()
         display = nil
         deviceSession = nil
-        stateToken = nil
+        sessionError = nil
     }
 }
 
