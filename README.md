@@ -29,6 +29,9 @@ The theater keeps its projector. The patron keeps their dignity.
   open questions.
 - `research/cinema-servers.md` — the cinema server integration surface:
   protocol flow, vendor support, caption formats, appliance design.
+- `backend/` — the control plane: theaters, auditoriums, booth appliances,
+  shows, and patron discovery. The cue stream stays on the LAN; the backend
+  never touches caption content. `npm install && npm test`.
 
 ## The honest version
 
