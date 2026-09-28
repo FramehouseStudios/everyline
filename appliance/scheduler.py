@@ -30,7 +30,7 @@ class CueScheduler:
         self._starts = {}      # cue id -> start_ms
         self._ends = {}        # cue id -> end_ms
 
-    def load(self, cues_by_lang: dict, playout_id: str) -> None:
+    def load(self, cues_by_lang: dict, playout_id: int) -> None:
         """Install a fresh cue set for a playout. Drops all session state."""
         self.reset()
         self.cues_by_lang = {lang: sorted(cues, key=lambda c: c.start_ms)
@@ -42,7 +42,7 @@ class CueScheduler:
                 self._starts[cid] = c.start_ms
                 self._ends[cid] = c.end_ms
 
-    def set_transport(self, *, playing: bool, position_ms: int, playout_id: str) -> None:
+    def set_transport(self, *, playing: bool, position_ms: int, playout_id: int) -> None:
         if playout_id != self.playout_id:
             # Per USL: on playout-ID mismatch the pending captions are discarded.
             self.reset()

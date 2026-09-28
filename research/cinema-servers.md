@@ -3,6 +3,19 @@
 Technical research memo — 2026-09-28
 Status: research only, no code. Every factual claim cites its source. Anything labeled **Inference** is my read, not a sourced fact. Anything labeled **Unverified** is a gap.
 
+**Addendum (2026-09-28, implementation pass):** the normative full texts of
+ST 430-10:2010 and ST 430-11:2010 turned out to be publicly hosted by SMPTE
+at pub.smpte.org (formerly paywalled). The "paywalled" statements below are
+superseded. The PDFs are © SMPTE, All Rights Reserved — research material
+only, gitignored, never committed. The wire facts extracted from them
+(Annex A UL registry, §§6–7 payload layouts, status codes, edit-unit time
+model) are now implemented in `appliance/csp.py` and `appliance/rpl.py` as
+clean-room code; 55/55 tests green including wire-level sessions. Vendor
+support claims (GDC, Christie, Dolby) and the no-open-source-CSP-client
+finding still stand. Still bench-gated: DCS quirks (timeline-extension
+usage, Update Timeline cadence, real lease durations, servers that never
+send Set Output Mode).
+
 ---
 
 ## 0. TL;DR

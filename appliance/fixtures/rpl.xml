@@ -1,21 +1,28 @@
-<AuxiliaryResourcePresentationList xmlns="http://www.smpte-ra.org/schemas/430-11/2010/RPL">
-  <!-- SYNTHETIC FIXTURE. Element names are best-effort from the public 430-11
-       sample; conform against the licensed standard before bench testing. -->
-  <TimelineOffset>0</TimelineOffset>
-  <ReelResources>
-    <ReelResource Language="en">
-      <ResourceFile>http://dcs.local/captions/feature_en.xml</ResourceFile>
-      <EntryPoint>0</EntryPoint>
-      <Duration>5400000</Duration>
-    </ReelResource>
-    <ReelResource Language="English">
-      <ResourceFile>http://dcs.local/captions/feature_en2.xml</ResourceFile>
-    </ReelResource>
-    <ReelResource Language="es">
-      <ResourceFile>http://dcs.local/captions/feature_es.xml</ResourceFile>
-    </ReelResource>
-    <ReelResource Language="fr">
+<rpl:ResourcePresentationList xmlns:rpl="http://www.smpte-ra.org/schemas/430-11/2010/RPL" PlayoutID="424242">
+  <!-- SYNTHETIC FIXTURE in the ST 430-11:2010 schema shape. Not from any real
+       DCP. Times are in EDIT UNITS (24 fps here): Duration 129600 = 5400 s. -->
+  <rpl:ReelResources ReelID="urn:uuid:11111111-1111-1111-1111-111111111111"
+                     EditRate="24 1" TimelineOffset="0">
+    <rpl:ReelResource Id="urn:uuid:22222222-2222-2222-2222-222222222222"
+                      ResourceType="ClosedCaption" Language="en"
+                      EntryPoint="0" Duration="129600" IntrinsicDuration="129600">
+      <rpl:ResourceFile>http://dcs.local/captions/feature_en.xml</rpl:ResourceFile>
+    </rpl:ReelResource>
+    <rpl:ReelResource Id="urn:uuid:33333333-3333-3333-3333-333333333333"
+                      ResourceType="ClosedCaption" Language="English"
+                      EntryPoint="0" IntrinsicDuration="129600">
+      <!-- no Duration: defaults to (IntrinsicDuration - EntryPoint) / EditRate -->
+      <rpl:ResourceFile>http://dcs.local/captions/feature_en2.xml</rpl:ResourceFile>
+    </rpl:ReelResource>
+    <rpl:ReelResource Id="urn:uuid:44444444-4444-4444-4444-444444444444"
+                      ResourceType="ClosedCaption" Language="es"
+                      EntryPoint="24000" Duration="105600" IntrinsicDuration="129600">
+      <rpl:ResourceFile>http://dcs.local/captions/feature_es.xml</rpl:ResourceFile>
+    </rpl:ReelResource>
+    <rpl:ReelResource Id="urn:uuid:55555555-5555-5555-5555-555555555555"
+                      ResourceType="ClosedCaption" Language="fr"
+                      EntryPoint="0" Duration="129600" IntrinsicDuration="129600">
       <!-- no ResourceFile: must be skipped with a warning, not crash -->
-    </ReelResource>
-  </ReelResources>
-</AuxiliaryResourcePresentationList>
+    </rpl:ReelResource>
+  </rpl:ReelResources>
+</rpl:ResourcePresentationList>

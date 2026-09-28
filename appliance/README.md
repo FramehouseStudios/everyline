@@ -23,15 +23,28 @@ python3 -m unittest discover -s tests -v
 - `csp.py` — the CSP session: connection model, the full message flow from
   USL's public implementation notes, lease handling, join-in-progress.
 
-## What's SPEC-gated (honest list)
+## What changed: the wire is real now
 
-1. **430-10 wire bytes.** The exact UL keys and payload layouts (§§6–7,
-   Annex A/B) are paywalled. `csp.py` marks every placeholder `SPEC` and
-   `pump()` refuses to run until the Annex A registry is loaded, so the
-   skeleton can never be mistaken for a working client.
-2. **RPL unit assumptions.** Bare integers in EntryPoint/Duration/TimelineOffset
-   are treated as milliseconds; conform against licensed 430-11.
-3. **Timed-text shapes.** Parsers cover the documented element shapes; the
+2026-09-28: the normative texts of ST 430-10:2010 and ST 430-11:2010 are
+publicly hosted by SMPTE (see `research/`). `csp.py` now speaks the real
+protocol: TCP 4170, KLV framing with fixed 4-byte BER lengths, the Annex A
+UL registry, per-message payload layouts, status codes, Request ID echo,
+lease semantics, the join-in-progress path, and log event access. `rpl.py`
+parses the real 430-11 schema with edit-unit time conversion. 55/55 tests
+green, including full sessions driven over the wire through a fake socket.
+
+The standard PDFs are © SMPTE, All Rights Reserved — they are research
+material only, gitignored, never committed. The code is our own clean-room
+implementation of the wire facts.
+
+## What's still bench-gated (honest list)
+
+1. **DCS quirks in the wild.** The protocol is standard; individual servers
+   are not. Open questions only a real cinema server answers: which timeline
+   extensions (keys 0–5) get used and when, how often DCSs actually send
+   Update Timeline, real-world lease durations, and servers that never send
+   Set Output Mode.
+2. **Timed-text shapes.** Parsers cover the documented element shapes; the
    conformance pass happens against real DCP assets on bench hardware.
 
 ## Fixtures

@@ -1,2 +1,9 @@
 node_modules/
 .DS_Store
+
+# Licensed standard PDFs: research material only, never commit.
+research/vendor/*.pdf
+
+__pycache__/
+*.pyc
+research/vendor/st0430-*.txt

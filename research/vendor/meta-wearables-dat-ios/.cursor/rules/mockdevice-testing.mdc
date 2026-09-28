@@ -1,0 +1,182 @@
+---
+description: MockDeviceKit for testing without physical glasses hardware
+globs: **/*Mock*, **/*Test*
+---
+
+# MockDevice Testing (iOS)
+
+Use MockDeviceKit to test DAT SDK integrations without physical Meta glasses.
+
+MockDeviceKit simulates Meta glasses behavior for development and testing. It provides:
+- `MockDeviceKit.shared` — Entry point (`MockDeviceKitInterface`) for creating simulated devices
+- `MockGlasses` — Simulated glasses, created with `pairGlasses(model:)`
+- `MockGlassesServices` — Per-device services: `camera`, `captouch`, `display`
+- `MockCameraKit` — Simulated camera with configurable video feed and photo capture
+- `MockCaptouchKit` — Simulated touchpad (`tap()`, `tapAndHold()`)
+- `MockDisplayKit` — Simulated Display surface for `MWDATDisplay` content
+- `MockPermissions` — Control DAT permission results without the Meta AI app
+
+`GlassesModel` cases: `.rayBanMeta`, `.oakleyMetaHSTN`, `.oakleyMetaVanguard`,
+`.rayBanMetaOptics`, `.metaGlasses`, `.metaRayBanDisplay`. Use `.metaRayBanDisplay`
+when you need a display-capable simulated device.
+
+## Setup
+
+Add `MWDATMockDevice` to your target via Swift Package Manager (it's included in the `meta-wearables-dat-ios` package).
+
+```swift
+import MWDATMockDevice
+```
+
+To test a Display experience, also add `MWDATDisplay` to the target. After
+enabling `MockDeviceKit`, use the normal `DeviceSession.addDisplay()` API.
+
+## Creating a mock device
+
+```swift
+import MWDATMockDevice
+
+let mockDeviceKit = MockDeviceKit.shared
+mockDeviceKit.enable()
+
+let mockDevice = try mockDeviceKit.pairGlasses(model: .rayBanMeta)
+```
+
+`enable()` starts from a registered, permissions-granted state. Pass a
+`MockDeviceKitConfig` when you want to exercise the registration or permission
+flow instead:
+
+```swift
+mockDeviceKit.enable(
+    config: MockDeviceKitConfig(initiallyRegistered: false, initialPermissionsGranted: false)
+)
+```
+
+Use `mockDeviceKit.pairedDevices`, `mockDeviceKit.unpairDevice(_:)`, and
+`mockDeviceKit.disable()` to tear devices down.
+
+## Simulating device states
+
+```swift
+// Simulate glasses lifecycle
+mockDevice.powerOn()
+mockDevice.unfold()
+mockDevice.don()    // Simulate wearing the glasses
+
+// Later...
+mockDevice.doff()   // Simulate removing
+mockDevice.fold()
+mockDevice.powerOff()
+
+// Battery, charging, and thermal state
+mockDevice.setBatteryLevel(35)
+mockDevice.setChargingState(.charging)
+mockDevice.setThermalLevel(.severe)
+```
+
+## Simulating touchpad input
+
+A single tap pauses an active camera stream, and a second tap resumes it — the
+`CameraAccess` tests use this to cover the `StreamState.paused` path.
+
+```swift
+mockDevice.services.captouch.tap()
+mockDevice.services.captouch.tapAndHold()
+```
+
+## Configuring permissions
+
+MockDeviceKit provides `permissions` to control permission behavior without the Meta AI app.
+
+By default, `requestPermission()` returns `.granted`. Use `set(_:_:)` to control `checkPermissionStatus()` and `setRequestResult(_:result:)` to control `requestPermission()` outcomes.
+
+```swift
+let mockDeviceKit = MockDeviceKit.shared
+
+// Simulate denied camera permission status
+mockDeviceKit.permissions.set(.camera, .denied)
+
+// Simulate denied request result (user tapping "deny")
+mockDeviceKit.permissions.setRequestResult(.camera, result: .denied)
+```
+
+## Setting up mock camera feeds
+
+### Video streaming
+
+```swift
+let camera = mockDevice.services.camera
+camera.setCameraFeed(fileURL: videoURL)
+
+// Or stream live from the phone's own camera
+camera.setCameraFeed(cameraFacing: .back)  // CameraFacing is .front or .back
+```
+
+### Photo capture
+
+```swift
+let camera = mockDevice.services.camera
+camera.setCapturedImage(fileURL: imageURL)
+```
+
+## Writing tests with MockDeviceKit
+
+Create a reusable test base class:
+
+```swift
+import MWDATCore
+import MWDATMockDevice
+import XCTest
+
+@MainActor
+class MockDeviceKitTestCase: XCTestCase {
+    private var mockDevice: MockGlasses?
+    private var cameraKit: MockCameraKit?
+
+    override func setUp() async throws {
+        try await super.setUp()
+        try? Wearables.configure()
+        MockDeviceKit.shared.enable()
+        let device = try MockDeviceKit.shared.pairGlasses(model: .rayBanMeta)
+        mockDevice = device
+        cameraKit = device.services.camera
+
+        // Make the device available to Wearables before creating a session
+        device.powerOn()
+        device.unfold()
+    }
+
+    override func tearDown() async throws {
+        MockDeviceKit.shared.disable()
+        mockDevice = nil
+        cameraKit = nil
+        try await super.tearDown()
+    }
+}
+```
+
+The device only shows up in `Wearables.shared.devicesStream()` after it is
+powered on and unfolded, so wait for your view model's "device available" state
+before calling `createSession(deviceSelector:)`.
+
+## Using MockDeviceKit in the CameraAccess sample
+
+The CameraAccess sample app includes a Debug menu for MockDeviceKit:
+
+1. Tap the **Debug icon** to open the MockDeviceKit menu
+2. Tap **Pair RayBan Meta** to create a simulated device
+3. Use **PowerOn**, **Unfold**, **Don** to simulate glasses states
+4. Select video/image files to configure mock camera feeds
+5. Start streaming to see simulated frames
+
+## Supported media formats
+
+| Type | Formats |
+|------|---------|
+| Video | h.265 (HEVC); the samples ship an `.mp4` file |
+| Image | JPEG, PNG |
+
+## Links
+
+- [Mock Device Kit overview](https://wearables.developer.meta.com/docs/mock-device-kit)
+- [iOS testing guide](https://wearables.developer.meta.com/docs/testing-mdk-ios)

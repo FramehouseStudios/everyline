@@ -1,0 +1,110 @@
+SMPTE ST 430-10 Implementation Notes
+Harold Hallikainen, 20 February 2018
+
+These notes reflect several years of observations of closed captioning system use of the
+SMPTE ST 430-10 Auxiliary Content Synchronization Protocol (ACSP). They are open for
+discussion as to how we can improve the operation of closed captioning systems.
+
+
+New Show Load
+The below sequence of CSP requests is suggested.
+   1. Terminate Lease
+   2. Get New Lease
+   3. Update Timeline
+   4. Set RPL Location (one or more)
+
+Some servers do a “rewind” of the current show when it ends and send a Set RPL Location
+request pointing to the RPL for the “rewound” show. Later, a new scheduled show is loaded and
+another Set RPL Location is sent. If the Terminate Lease - Get New Lease sequence is not sent
+when the new show is loaded, the captioning equipment does not know about the abandoned
+show. The captioning equipment will continue to hold the abandoned content and, if buffer
+space is not available, hold off on fetching the new content.
+
+While not critical, placing the Update Timeline request before the Set RPL Location allows the
+captioning equipment to skip fetching reels that will not be played (where the RPL shows a
+timeline value less than the current timeline).
+
+
+Playout Start/Stop
+The server should send a Set Output Mode request whenever the server starts or stops
+playback. Some servers send Set Output Mode only if the content contains closed captioning.
+Since ST 430-10 can drive devices other than closed captioning systems, it is desirable for such
+systems to know the status of the server (playing or not). In addition, some closed captioning
+systems display a “welcome message” when content is not playing. Setting output mode to
+disabled during non-captioned content results in the welcome message being displayed (instead
+of a blank screen for uncaptioned content).
+ACSP New Connection Sequence
+The following sequence of requests is proposed upon a server receiving a new ACSP
+connection.
+   1. Announce request
+   2. Get New Lease request
+   3. Update Timeline request
+   4. Set RPL Location Request(s)
+   5. Set Output Mode request (reflecting current status, enabled or disabled)
+
+This sequence should be followed on an initial connection or a reconnection by a captioning
+device. Note that ST 430-10 section 7.2.6.6 requires the Auxiliary Content Server (ACS or
+captioning system) to continue outputting resources on loss of communications with the server
+until the lease times out. This allows for recovery from momentary communications
+interruptions. The suggested new connection sequence does not include a lease terminate. The
+new connection may arrive before or during playback. Normally, it will arrive before playback
+starts, but if there is a communications interruption, it may arrive during playback.
+
+If the connection arrives before playback starts, the captioning system will probably have an
+expired lease and be holding no content. The above sequence would behave the same as
+loading a new show.
+
+If the connection arrives during playback and the ACS still has a valid lease (there was a
+communications interruption), the suggested sequence results in captions continuing without
+interruption. The Update Timeline request keeps the captions in sync. The Set RPL Location is
+not required on a reconnect if it was a temporary Ethernet issue, but would be required if the
+ACS power cycled. If there were a temporary Ethernet issue causing the interruption, the ACS
+would fetch data according to the Set RPL Location request(s) and skip fetching data that
+already played (based on the Update Timeline request). The ACS may end up with two copies
+of content for the time after the reconnect, but this does not cause an issue since the extra copy
+will be discarded when the first copy has finished being played and it is discovered to be stale
+content.
+
+Some servers to not send Set Output Mode on an ACSP connection. If this is an initial
+connection by the ACS to the server, the ACS does not know that a show is running. results in
+no captions for the current show, but captions operate properly for the next show.
+
+
+Request Interval vs Lease Interval
+ST 430-10 section 7.2.2 has a note suggesting the time between requests be half the lease
+duration. A few servers seem to be “pushing the limit” and sending status requests just before
+the lease expires. Slight timing variations between the server and ACS or slight delays in
+Ethernet communications can allow the lease to expire in this situation. The interval between
+requests should be half the lease interval.
+
+
+Expired Lease Recovery
+ If the above request interval is used, we should never have an issue with lease expiration.
+However, it would be nice if the server responded to a lease expiration (as reported in a status
+response) by performing the ACSP New Connection Sequence above. This would allow a
+system to recover from this situation.
+
+
+Playout ID Uniqueness
+ST 430-10 section 7.2.4.1 requires the Playout ID for each RPL within a lease to be unique.
+One server sends a Playout ID of zero for each composition in the show that does not have
+captions. If there are multiple compositions within a show with no captions (such as multiple
+trailers), several RPLs with non-unique Playout IDs are sent. In addition, the Timeline Update
+request has several segments with non-unique Playout IDs. This can be confusing to the
+captioning equipment since it appears the playback has “looped back.”
+
+Systems that use an RPL per show can have an empty ReelResources element for reels that to
+not have captions or other auxiliary content.
+
+Systems that use an RPL per composition can generate an RPL with empty ReelResources for
+a composition that does not have captions or other auxiliary content. However, the Playout ID
+associated with each RPL is to be unique.
+
+
+Comments
+Please send comments on this document to ​Harold Hallikainen​ .
+
+
+Revision History
+   ●   2018-02-20 - Original draft.
+

@@ -1,10 +1,21 @@
-"""SMPTE 430-11 RPL (Auxiliary Resource Presentation List) parsing.
+"""SMPTE 430-11 RPL (Resource Presentation List) parsing.
 
-Best-effort from the public 430-11 sample (ReelResources / ReelResource /
-TimelineOffset structure). Element and attribute names will be conformed
-against the licensed standard before bench testing. Parsing is defensive
-throughout: the field notes (USL) document dead URLs, empty resources, and
-nonstandard language codes in the wild.
+Element/attribute names and the time model from ST 430-11:2010, section 6.3
+and the schema annex:
+  ResourcePresentationList (optional PlayoutID attribute, unsignedInt)
+  +- ReelResources (required: ReelID uuid, EditRate rational "num den",
+  |                 TimelineOffset unsignedLong, in edit units)
+  +- ReelResource (required: Id uuid, ResourceType string, IntrinsicDuration
+  |                in edit units; optional: Language, EntryPoint, Duration)
+  +- ResourceFile (element text: the resource URI; may repeat, we take first)
+
+Time model: TimelineOffset, EntryPoint, Duration and IntrinsicDuration are
+all in EDIT UNITS, not milliseconds. ms = units * 1000 * den / num using the
+reel's EditRate (6.3.2.3, 6.3.3.4-6.3.3.6). If Duration is absent, the
+playable region is (IntrinsicDuration - EntryPoint) / EditRate seconds.
+
+Parsing stays defensive: the field notes document dead URLs, empty
+resources, and nonstandard language codes in the wild.
 """
 
 import xml.etree.ElementTree as ET
@@ -35,17 +46,21 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _ms(value) -> int:
-    """SPEC-ASSUMPTION: bare integers in the RPL are milliseconds.
+def _units_to_ms(units: int, num: int, den: int) -> int:
+    if den == 0:
+        raise ValueError("EditRate denominator is 0")
+    return units * 1000 * den // num
 
-    The public sample does not pin the unit; conform against the licensed
-    430-11 before bench testing. Timecode strings are also accepted.
-    """
-    v = str(value).strip()
-    if ":" in v:
-        from .timedtext import parse_timecode  # local import, same package
-        return parse_timecode(v)
-    return int(float(v))
+
+def _parse_edit_rate(raw: str | None):
+    """'24 1' -> (24, 1). Raises ValueError on garbage."""
+    parts = (raw or "").split()
+    if len(parts) != 2:
+        raise ValueError(f"EditRate must be 'num den', got {raw!r}")
+    num, den = int(parts[0]), int(parts[1])
+    if num <= 0 or den <= 0:
+        raise ValueError(f"EditRate out of range: {raw!r}")
+    return num, den
 
 
 @dataclass
@@ -61,6 +76,7 @@ class ReelResource:
 class RplDocument:
     resources: list[ReelResource] = field(default_factory=list)
     timeline_offset_ms: int = 0
+    playout_id: int | None = None
     warnings: list[str] = field(default_factory=list)
 
 
@@ -71,50 +87,95 @@ def parse_rpl(xml_text: str) -> RplDocument:
     except ET.ParseError as e:
         raise ValueError(f"RPL is not valid XML: {e}")
 
-    for el in root.iter():
-        if _local(el.tag) == "TimelineOffset" and el.text and el.text.strip():
-            try:
-                doc.timeline_offset_ms = _ms(el.text)
-            except ValueError:
-                doc.warnings.append(f"unparseable TimelineOffset: {el.text!r}")
+    # 6.3.1: optional PlayoutID correlates the RPL to the CSP playout.
+    playout_raw = root.get("PlayoutID", root.get("playoutID", ""))
+    if playout_raw.strip():
+        try:
+            doc.playout_id = int(playout_raw)
+        except ValueError:
+            doc.warnings.append(f"unparseable PlayoutID: {playout_raw!r}")
 
     reel_index = -1
     for el in root.iter():
-        name = _local(el.tag)
-        if name == "ReelResources":
-            reel_index += 1
-        elif name == "ReelResource":
-            lang_raw = el.get("Language", el.get("language", ""))
+        if _local(el.tag) != "ReelResources":
+            continue
+        reel_index += 1
+        # 6.3.2: EditRate and TimelineOffset are attributes, in edit units.
+        try:
+            num, den = _parse_edit_rate(el.get("EditRate"))
+        except ValueError:
+            doc.warnings.append(
+                f"ReelResources #{reel_index}: bad/missing EditRate "
+                f"{el.get('EditRate')!r}; assuming 1 unit = 1 ms")
+            num, den = 1000, 1
+        try:
+            offset_units = int(el.get("TimelineOffset", "0"))
+        except ValueError:
+            doc.warnings.append(
+                f"ReelResources #{reel_index}: bad TimelineOffset; using 0")
+            offset_units = 0
+        reel_offset_ms = _units_to_ms(offset_units, num, den)
+        if reel_index == 0:
+            doc.timeline_offset_ms = reel_offset_ms
+        elif reel_offset_ms != doc.timeline_offset_ms:
+            # Multi-reel shows: each reel's offset is show-relative. Keep the
+            # first reel's offset as the document offset and fold each reel's
+            # own offset into its resources below.
+            pass
+
+        for res_el in el:
+            if _local(res_el.tag) != "ReelResource":
+                continue
+            lang_raw = res_el.get("Language", res_el.get("language", ""))
             language = normalize_language(lang_raw)
             raw = lang_raw.strip()
-            if raw and (raw.lower() in LANGUAGE_ALIASES or normalize_language(raw) != raw):
+            if raw and (raw.lower() in LANGUAGE_ALIASES
+                        or normalize_language(raw) != raw):
                 doc.warnings.append(
-                    f"nonstandard language code {lang_raw!r} normalized to {language!r}")
+                    f"nonstandard language code {lang_raw!r} normalized to "
+                    f"{language!r}")
             url = None
-            for child in el:
-                if _local(child.tag) == "ResourceFile" and child.text and child.text.strip():
+            for child in res_el:
+                if _local(child.tag) == "ResourceFile" and child.text \
+                        and child.text.strip():
                     url = child.text.strip()
                     break
             if not url:
                 doc.warnings.append(
                     f"ReelResource (lang={language}) has no ResourceFile; skipped")
                 continue
-            entry, duration = 0, None
-            for child in el:
-                cname = _local(child.tag)
-                if cname == "EntryPoint" and child.text:
-                    try:
-                        entry = _ms(child.text)
-                    except ValueError:
-                        doc.warnings.append(f"unparseable EntryPoint: {child.text!r}")
-                elif cname == "Duration" and child.text:
-                    try:
-                        duration = _ms(child.text)
-                    except ValueError:
-                        doc.warnings.append(f"unparseable Duration: {child.text!r}")
+            try:
+                entry_units = int(res_el.get("EntryPoint", "0") or "0")
+            except ValueError:
+                doc.warnings.append(
+                    f"unparseable EntryPoint {res_el.get('EntryPoint')!r}; using 0")
+                entry_units = 0
+            dur_raw = res_el.get("Duration")
+            intrinsic_raw = res_el.get("IntrinsicDuration")
+            try:
+                if dur_raw is not None:
+                    # 6.3.3.5: playable region in edit units.
+                    duration_ms = _units_to_ms(int(dur_raw), num, den)
+                elif intrinsic_raw is not None:
+                    # 6.3.3.5: default is (IntrinsicDuration - EntryPoint).
+                    duration_ms = _units_to_ms(
+                        int(intrinsic_raw) - entry_units, num, den)
+                else:
+                    duration_ms = None
+                    doc.warnings.append(
+                        f"ReelResource (lang={language}) has no Duration or "
+                        f"IntrinsicDuration; uncapped")
+            except ValueError:
+                doc.warnings.append(
+                    f"unparseable Duration/IntrinsicDuration for lang={language}; "
+                    f"uncapped")
+                duration_ms = None
+            entry_ms = _units_to_ms(entry_units, num, den)
+            # Each reel's TimelineOffset is show-relative; fold it in.
             doc.resources.append(ReelResource(
                 language=language, url=url,
-                entry_point_ms=entry, duration_ms=duration,
-                reel_index=max(reel_index, 0),
+                entry_point_ms=entry_ms + reel_offset_ms,
+                duration_ms=duration_ms,
+                reel_index=reel_index,
             ))
     return doc
