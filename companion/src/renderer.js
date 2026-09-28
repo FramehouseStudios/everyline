@@ -1,10 +1,10 @@
-// LensRenderer: the seam where the Meta Wearables SDK will plug in.
+// LensRenderer: the seam where the Meta Wearables SDK plugs in.
 //
 // Contract: showCue(cue), clear(), setStatus(...), setLang(lang).
 // WebRenderer implements it with DOM today (the "simulated lens").
-// A future MetaDisplayRenderer implements the same four methods against
-// the Wearables Device Access Toolkit's Display capability; everything
-// above this file (stream, clock, player, app flow) stays untouched.
+// ios/MetaDisplayRenderer.swift implements the same four methods against
+// the Wearables DAT Display capability (MWDATDisplay); everything above
+// this file (stream, clock, player, app flow) stays untouched.
 
 export class WebRenderer {
   constructor(root) {

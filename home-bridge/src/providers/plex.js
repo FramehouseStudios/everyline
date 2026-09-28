@@ -4,8 +4,10 @@
 // stream for the active session, then serves it over Cue Stream Protocol v0
 // exactly like the theater booth does. The phone can't tell the difference.
 //
-// Built against Plex's documented API shapes (/status/sessions, stream keys).
-// Tested here against a mock Plex server; verify once against a real one
+// Built against the verified Plex API shapes (/status/sessions, stream keys)
+// researched 2026-09-28 against python-plexapi (Plex publishes no official
+// API docs; see research/plex-api.md). Tested here against a mock Plex
+// server shaped like the real responses; verify once against a real one
 // before calling it production (see README).
 
 import { parseSrt } from '../srt.js';
@@ -28,9 +30,14 @@ export class PlexMedia {
   }
 
   _get(path) {
-    const sep = path.includes('?') ? '&' : '?';
-    return this.fetch(`${this.url}${path}${sep}X-Plex-Token=${encodeURIComponent(this.token)}`, {
-      headers: { Accept: 'application/json' },
+    // Canonical auth: X-Plex-Token header (server.py:155-160). Plex also
+    // accepts ?X-Plex-Token= in the URL, but URL-embedded tokens leak into
+    // server and proxy logs, so we never put it there.
+    return this.fetch(`${this.url}${path}`, {
+      headers: {
+        Accept: 'application/json',
+        'X-Plex-Token': this.token,
+      },
     });
   }
 
@@ -49,10 +56,11 @@ export class PlexMedia {
     }));
   }
 
-  // Bind to one active session; returns a PlexSession implementing the
+  // Bind to one active session; takes the session's metadata key
+  // (/library/metadata/<ratingKey>). Returns a PlexSession implementing the
   // media interface the cue server expects.
-  async attach(sessionKey) {
-    const res = await this._get(sessionKey);
+  async attach(metadataKey) {
+    const res = await this._get(metadataKey);
     if (!res.ok) throw new Error(`plex metadata: HTTP ${res.status}`);
     const data = await res.json();
     const meta = data?.MediaContainer?.Metadata?.[0];
@@ -61,21 +69,24 @@ export class PlexMedia {
     for (const media of meta.Media || []) {
       for (const part of media.Part || []) {
         for (const s of part.Stream || []) {
+          // streamType 3 = subtitle. Only EXTERNAL (sidecar) streams carry a
+          // `key` and are downloadable; embedded streams are structurally
+          // undownloadable via the API, so they are skipped, not errored.
           if (s.streamType === 3 && s.key) {
             streams.push({ lang: normLang(s.languageCode), key: s.key, codec: s.codec });
           }
         }
       }
     }
-    if (!streams.length) throw new Error('plex: no downloadable subtitle streams on this session');
-    return new PlexSession(this, sessionKey, meta, streams);
+    if (!streams.length) throw new Error('plex: no downloadable subtitle streams on this session (external/sidecar text subtitles only; embedded streams cannot be fetched via the Plex API)');
+    return new PlexSession(this, metadataKey, meta, streams);
   }
 }
 
 class PlexSession {
-  constructor(client, sessionKey, meta, streams) {
+  constructor(client, metadataKey, meta, streams) {
     this.client = client;
-    this.sessionKey = sessionKey;
+    this.metadataKey = metadataKey;
     this.title = meta.grandparentTitle || meta.title || 'Plex';
     this.streams = streams;
     this.cache = new Map(); // lang -> cues
@@ -103,7 +114,7 @@ class PlexSession {
 
   async state() {
     const sessions = await this.client.sessions();
-    const s = sessions.find((x) => x.key === this.sessionKey);
+    const s = sessions.find((x) => x.key === this.metadataKey);
     if (!s) return { status: 'paused', positionMs: 0 };
     return {
       status: s.state === 'playing' ? 'playing' : 'paused',

@@ -4,21 +4,33 @@ import http from 'http';
 
 import { PlexMedia } from '../src/providers/plex.js';
 
-// Canned Plex API: one playing session with an English SRT stream.
+// Canned Plex API: one playing session with external English/Spanish SRT
+// streams plus an embedded (keyless, undownloadable) French stream.
+// Shapes follow research/plex-api.md (verified against python-plexapi).
 function startMockPlex() {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     res.setHeader('Content-Type', 'application/json');
     if (url.pathname === '/status/sessions') {
+      // Auth must arrive as the X-Plex-Token header, never in the URL.
+      if (req.headers['x-plex-token'] !== 'tok' || url.searchParams.has('X-Plex-Token')) {
+        res.statusCode = 401;
+        res.end('{}');
+        return;
+      }
       res.end(JSON.stringify({
         MediaContainer: {
           Metadata: [{
             key: '/library/metadata/42',
+            sessionKey: '7',
+            type: 'movie',
             grandparentTitle: 'The Long Room',
             title: 'The Long Room',
             duration: 90000,
             viewOffset: 12345,
-            Player: { state: 'playing' },
+            Player: { state: 'playing', title: 'Plex for iOS' },
+            Session: { id: 'abc123', bandwidth: 8000, location: 'lan' },
+            User: { id: '1', title: 'josh' },
           }],
         },
       }));
@@ -32,8 +44,10 @@ function startMockPlex() {
               Part: [{
                 Stream: [
                   { streamType: 1, codec: 'h264' },
-                  { streamType: 3, languageCode: 'eng', codec: 'srt', key: '/library/streams/7' },
+                  { streamType: 3, languageCode: 'eng', languageTag: 'en', codec: 'srt', key: '/library/streams/7' },
                   { streamType: 3, languageCode: 'spa', codec: 'srt', key: '/library/streams/8' },
+                  // Embedded subtitle: no key, structurally undownloadable.
+                  { streamType: 3, languageCode: 'fre', codec: 'srt' },
                 ],
               }],
             }],
@@ -71,6 +85,7 @@ test('plex: sessions, attach, subtitle download, live position', async () => {
 
     const session = await plex.attach('/library/metadata/42');
     assert.equal(session.title, 'The Long Room');
+    // Embedded French (no key) is skipped, not errored.
     assert.deepEqual(session.languages().sort(), ['en', 'es']);
 
     const en = await session.cues('en');
