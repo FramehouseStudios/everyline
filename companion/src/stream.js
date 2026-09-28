@@ -11,15 +11,17 @@
 const PROTOCOL_VERSION = 0;
 
 export class BoothStream {
-  constructor({ wsImpl, handlers = {} }) {
+  constructor({ wsImpl, handlers = {}, connectTimeoutMs = 8000 }) {
     this.WS = wsImpl;
     this.h = handlers;
+    this._connectTimeoutMs = connectTimeoutMs;
     this.state = 'idle'; // idle|connecting|live|reconnecting|closed
     this.attempt = 0;
     this.url = null;
     this.lang = null;
     this.ws = null;
     this._timer = null;
+    this._connectTimer = null;
   }
 
   connect(url) {
@@ -40,6 +42,8 @@ export class BoothStream {
     this.state = 'closed';
     if (this._timer) clearTimeout(this._timer);
     this._timer = null;
+    if (this._connectTimer) clearTimeout(this._connectTimer);
+    this._connectTimer = null;
     try {
       if (this.ws) this.ws.close();
     } catch {
@@ -52,13 +56,27 @@ export class BoothStream {
     this._setState('connecting');
     const ws = new this.WS(this.url);
     this.ws = ws;
+    // Connect watchdog: a blackholed TCP (wrong IP, client isolation on
+    // auditorium WiFi) can sit in CONNECTING for 30-75s+ with no
+    // onopen/onclose/onerror, leaving the UI on "connecting…" forever.
+    // After 8s of silence, close the socket; onclose drives the retry.
+    if (this._connectTimer) clearTimeout(this._connectTimer);
+    this._connectTimer = setTimeout(() => {
+      if (this.ws === ws && this.state === 'connecting') {
+        try { ws.close(); } catch { /* onclose will drive the reconnect */ }
+      }
+    }, this._connectTimeoutMs);
     ws.onopen = () => {
+      if (this.ws !== ws) return; // stale socket
+      if (this._connectTimer) clearTimeout(this._connectTimer);
+      this._connectTimer = null;
       this.attempt = 0;
       this._setState('live');
       this._send({ type: 'hello', client: 'everyline-companion', protocol: PROTOCOL_VERSION });
       if (this.lang) this._send({ type: 'subscribe', lang: this.lang });
     };
     ws.onmessage = (ev) => {
+      if (this.ws !== ws) return; // stale socket: ignore
       let msg;
       try {
         msg = JSON.parse(typeof ev.data === 'string' ? ev.data : ev.data.toString());
@@ -67,8 +85,16 @@ export class BoothStream {
       }
       this._route(msg);
     };
-    ws.onclose = () => this._reconnect();
+    // Guard every handler against stale sockets: if connect() runs again
+    // while an old socket is mid-close, the old socket's async onclose
+    // must not schedule a spurious reconnect (or worse, two concurrent
+    // sockets with duplicate hello/subscribe traffic).
+    ws.onclose = () => {
+      if (this.ws !== ws) return;
+      this._reconnect();
+    };
     ws.onerror = () => {
+      if (this.ws !== ws) return;
       try {
         ws.close();
       } catch {

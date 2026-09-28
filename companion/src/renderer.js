@@ -37,6 +37,7 @@ export class WebRenderer {
     if (state === 'live') bits.push('● live');
     else if (state === 'connecting') bits.push('connecting…');
     else if (state === 'reconnecting') bits.push('reconnecting…');
+    else if (state === 'paused') bits.push('❚❚ paused');
     else if (state === 'closed') bits.push('disconnected');
     if (lang) bits.push(lang.toUpperCase());
     // Honest source badges: simulated and demo sources say so.

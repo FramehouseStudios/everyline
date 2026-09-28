@@ -199,6 +199,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   font-weight: 600;
   letter-spacing: -0.015em;
   text-wrap: balance;
+  /* Two-line DCP/SRT cues carry \n; without this they collapse into one
+     run-on line (the demo client already had this right). */
+  white-space: pre-line;
   opacity: 0;
   transform: translateY(6px);
   transition: opacity 140ms ease-out, transform 140ms ease-out;

@@ -108,14 +108,42 @@ class Booth:
         if not self.clients:
             return
         data = json.dumps(msg)
-        dead = []
-        for ws in self.clients:
+
+        async def _one(ws):
             try:
                 await ws.send(data)
             except Exception:
-                dead.append(ws)
+                return ws
+            return None
+
+        # Fan out concurrently: one slow phone must not head-of-line
+        # block the heartbeat for every other patron.
+        dead = [ws for ws in
+                await asyncio.gather(*(_one(ws) for ws in self.clients))
+                if ws is not None]
         for ws in dead:
             self.clients.pop(ws, None)
+
+    async def _push_cue(self, ws, state, cue):
+        """Send one cue. Returns the ws if it died, else None.
+
+        The cue is marked sent only AFTER a successful send: marking it
+        first (and swallowing the failure) permanently loses that caption
+        for the patron on flaky WiFi.
+        """
+        try:
+            await ws.send(json.dumps({
+                "type": "cue", "id": cue["id"],
+                "lang": cue["lang"],
+                "startMs": cue["startMs"],
+                "endMs": cue["endMs"],
+                "text": cue["text"],
+                "issuedAtMs": int(time.time() * 1000),
+            }))
+        except Exception:
+            return ws
+        state["sent"].add(cue["id"])
+        return None
 
     async def tick(self):
         """Push cues ahead of the playhead; heartbeat transport."""
@@ -128,29 +156,46 @@ class Booth:
                     self.position_ms = DURATION_MS
                     await self.broadcast(self.transport_msg())
                     continue
+                jobs = []
                 for ws, state in list(self.clients.items()):
                     lang = state.get("lang", "en")
                     for cue in TRACKS.get(lang, []):
                         if cue["id"] in state["sent"]:
                             continue
                         if cue["startMs"] <= pos + LOOKAHEAD_MS and cue["endMs"] > pos:
-                            state["sent"].add(cue["id"])
-                            try:
-                                await ws.send(json.dumps({
-                                    "type": "cue", "id": cue["id"],
-                                    "lang": cue["lang"],
-                                    "startMs": cue["startMs"],
-                                    "endMs": cue["endMs"],
-                                    "text": cue["text"],
-                                    "issuedAtMs": int(time.time() * 1000),
-                                }))
-                            except Exception:
-                                pass
+                            jobs.append(self._push_cue(ws, state, cue))
+                # Concurrent fan-out: sequential `await ws.send` let a
+                # single half-open phone stall captions theater-wide.
+                # _push_cue catches everything, so results are ws-or-None.
+                dead = {ws for ws in await asyncio.gather(*jobs)
+                        if ws is not None}
+                for ws in dead:
+                    self.clients.pop(ws, None)
                 if time.monotonic() - self._last_heartbeat >= 1.0:
                     self._last_heartbeat = time.monotonic()
                     await self.broadcast(self.transport_msg())
 
     async def handler(self, ws):
+        # The client speaks first: hello carries its protocol version.
+        # A future client speaking protocol 1 must be rejected loudly,
+        # not silently served v0 it cannot parse. The client is only
+        # registered for cue pushes after a valid hello.
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=10)
+            hello = json.loads(raw)
+        except Exception:
+            hello = None
+        if not hello or hello.get("type") != "hello":
+            return
+        if hello.get("protocol", 0) != 0:
+            try:
+                await ws.send(json.dumps({
+                    "type": "error",
+                    "error": f"unsupported protocol {hello.get('protocol')}; this booth speaks 0",
+                }))
+            except Exception:
+                pass
+            return
         self.clients[ws] = {"lang": "en", "sent": set()}
         print(f"client connected ({len(self.clients)} total)")
         try:

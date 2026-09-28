@@ -95,7 +95,7 @@
 </div>
 
 <script>
-const ws = new WebSocket(`ws://${location.hostname}:8765`);
+/* (ws is created in connect(), in the wiring section below) */
 let lang = 'en', languages = ['en'];
 let transport = { status: 'paused', positionMs: 0, at: performance.now() };
 let scheduled = [];
@@ -157,8 +157,15 @@ function syncVideo() {
 /* ---- transport + timeline ---- */
 function onTransport(t) {
   const was = transport.status;
+  const jumped = Math.abs(t.positionMs - transport.positionMs) > 1500;
   transport = { status: t.status, positionMs: t.positionMs, at: performance.now() };
-  if (t.status === 'paused' && was === 'playing') { clearScheduled(); captionEl.classList.remove('on'); }
+  // A seek while playing leaves stale caption timeouts that would fire
+  // and flash the wrong cue; drop them on any position jump, not just
+  // on play->pause transitions.
+  if (jumped || (t.status === 'paused' && was === 'playing')) {
+    clearScheduled();
+    captionEl.classList.remove('on');
+  }
   $('pausedChip').classList.toggle('on', t.status === 'paused');
   $('btnPlay').classList.toggle('primary', t.status !== 'playing');
   $('boothMeta').textContent =
@@ -190,7 +197,16 @@ function buildTimeline(cues) {
 }
 
 /* ---- wiring ---- */
-ws.onopen = () => { ws.send(JSON.stringify({ type: 'hello', client: 'glasses-view', protocol: 0 })); };
+let ws = null;
+let reconnectDelay = 1000;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.hostname}:8765`);
+  ws.onopen = () => {
+    reconnectDelay = 1000; // reset backoff on a good connect
+    $('showingLine').textContent = 'connected to booth';
+    ws.send(JSON.stringify({ type: 'hello', client: 'glasses-view', protocol: 0 }));
+  };
 ws.onmessage = e => {
   const m = JSON.parse(e.data);
   if (m.type === 'welcome') {
@@ -219,7 +235,17 @@ ws.onmessage = e => {
     if ($('viewBooth').classList.contains('active')) log(`cue ${m.id} → "${m.text.split('\n')[0]}"`);
   }
 };
-ws.onclose = () => { $('showingLine').textContent = 'disconnected from booth — restart booth.py'; };
+ws.onclose = () => {
+  // Any booth restart or blip used to kill the demo until reload.
+  // Reconnect with capped backoff instead.
+  $('showingLine').textContent = `disconnected from booth — retrying…`;
+  setTimeout(connect, reconnectDelay);
+  reconnectDelay = Math.min(reconnectDelay * 2, 15000);
+};
+
+} // end connect()
+
+connect(); // first connect
 
 $('btnPlay').onclick  = () => ws.send(JSON.stringify({ type: 'command', command: 'play' }));
 $('btnPause').onclick = () => ws.send(JSON.stringify({ type: 'command', command: 'pause' }));

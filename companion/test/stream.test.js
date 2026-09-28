@@ -133,3 +133,83 @@ test('close() stops reconnecting', async () => {
   assert.equal(booth.seen.filter((m) => m.type === 'hello').length, hellos);
   booth.wss.close();
 });
+
+// Controllable fake socket: the test drives open/message/close.
+function fakeWsFactory() {
+  const instances = [];
+  class FakeWS {
+    constructor(url) {
+      this.url = url;
+      this.sent = [];
+      this.closed = false;
+      instances.push(this);
+    }
+    send(data) { this.sent.push(data); }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      if (this.onclose) this.onclose();
+    }
+  }
+  return { instances, FakeWS };
+}
+
+test('stale socket close does not trigger a spurious reconnect', async () => {
+  const { instances, FakeWS } = fakeWsFactory();
+  const states = [];
+  const stream = new BoothStream({
+    wsImpl: FakeWS,
+    handlers: { onStatus: (s) => states.push(s) },
+  });
+  stream.connect('ws://x');
+  const a = instances[0];
+  a.onopen();
+  assert.equal(stream.state, 'live');
+  // A second connect while A is mid-close: A's async onclose must not
+  // schedule a reconnect after B is already live.
+  stream.connect('ws://x');
+  const b = instances[1];
+  b.onopen();
+  assert.equal(stream.state, 'live');
+  assert.equal(stream.ws, b);
+  a.onclose(); // stale socket fires late
+  assert.equal(stream.state, 'live', 'stale onclose must not reconnect');
+  assert.ok(!states.includes('reconnecting'), `states: ${states}`);
+  // ...but the CURRENT socket closing still reconnects.
+  b.onclose();
+  assert.equal(stream.state, 'reconnecting');
+  stream.close();
+});
+
+test('stale socket messages are ignored', () => {
+  const { instances, FakeWS } = fakeWsFactory();
+  const cues = [];
+  const stream = new BoothStream({
+    wsImpl: FakeWS,
+    handlers: { onCue: (m) => cues.push(m) },
+  });
+  stream.connect('ws://x');
+  const a = instances[0];
+  a.onopen();
+  stream.connect('ws://x');
+  instances[1].onopen();
+  a.onmessage({ data: JSON.stringify({ type: 'cue', id: 'stale-1' }) });
+  assert.equal(cues.length, 0, 'message from stale socket must be dropped');
+  stream.close();
+});
+
+test('connect watchdog closes a socket stuck in CONNECTING', async () => {
+  const { instances, FakeWS } = fakeWsFactory();
+  const states = [];
+  const stream = new BoothStream({
+    wsImpl: FakeWS,
+    handlers: { onStatus: (s) => states.push(s) },
+    connectTimeoutMs: 50,
+  });
+  stream.connect('ws://blackhole');
+  assert.equal(stream.state, 'connecting');
+  // Never fires onopen: the SYN goes nowhere (wrong IP, client isolation).
+  await waitFor(() => states.includes('reconnecting'), 4000);
+  assert.ok(instances[0].closed, 'watchdog must close the stuck socket');
+  stream.close();
+});

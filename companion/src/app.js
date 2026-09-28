@@ -68,7 +68,12 @@ function makeHandlers() {
     onCue: (m) => player.pushCue(m),
     onTransport: (m) => {
       clock.onTransport(m, Date.now());
-      renderer.setStatus({ state: 'live', title: currentTitle, lang: player.lang, source: currentSource });
+      // The badge must follow the real transport status: hardcoding
+      // 'live' says "● live" while the film is paused (visible in Home
+      // mode), and a half-open socket says it while the clock is stale.
+      const state = clock.isStale() ? 'reconnecting'
+        : m.status === 'playing' ? 'live' : 'paused';
+      renderer.setStatus({ state, title: currentTitle, lang: player.lang, source: currentSource });
     },
     onStatus: (s) =>
       renderer.setStatus({ state: s, title: currentTitle, lang: player?.lang, source: currentSource }),
@@ -81,6 +86,12 @@ function makeHandlers() {
 }
 
 function startLive({ label, makeSource, url, demo = false }) {
+  // Tear down any previous session first: startLive is re-entrant
+  // (double-tap "Start demo", double-tap Home connect) and without this
+  // the old source's socket/interval keeps running — a ghost client the
+  // booth keeps pushing cues into.
+  if (source) source.close();
+  cancelAnimationFrame(raf);
   clock = new BoothClock();
   currentTitle = label;
   currentSource = '';
@@ -310,7 +321,7 @@ async function joinTheaterDeep(qp) {
         { headers: { authorization: `Bearer ${qp.token}` } });
       if (res.ok) {
         const d = await res.json();
-        const aud = d.auditoriums.find((a) => a.id === qp.auditorium);
+        const aud = d.auditoriums.find((a) => String(a.id) === qp.auditorium);
         if (aud && aud.captionsAvailable) {
           return startLive({
             label: aud.currentShow?.title || aud.name,

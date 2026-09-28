@@ -10,11 +10,17 @@ Transport: WebSocket, JSON messages. Times in milliseconds.
 ## Booth -> phone
 
 `welcome`
-  Sent on connect.
+  Sent in reply to `hello` (the phone speaks first).
   { "type": "welcome", "protocol": 0,
     "showing": { "title": "...", "auditorium": "..." },
     "serverNowMs": 1727..., "languages": ["en", "es"],
     "source": "simulated" | "dcp" }
+
+`error`
+  Sent in reply to `hello` when the phone's protocol version is not
+  supported, then the connection is closed. A future client speaking
+  protocol 1 must be rejected loudly, never silently served v0.
+  { "type": "error", "error": "unsupported protocol 1; this booth speaks 0" }
 
 `cue`
   Sent ~750ms before the cue's start time so the phone can schedule it.

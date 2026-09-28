@@ -35,7 +35,10 @@ BoothStream  --Cue Stream Protocol v0-->  BoothClock  -->  CuePlayer  -->  LensR
 
 - `src/stream.js` — WebSocket lifecycle, hello/subscribe, reconnect backoff.
   WebSocket implementation is injected (native in browser, `ws` in tests).
-- `src/clock.js` — media position from `transport` messages. No extrapolation.
+- `src/clock.js` — media position from `transport` messages. Extrapolates at 1x
+  while playing, capped at +10s of transport silence: past that the clock
+  freezes and reports stale (a half-open socket must not march captions
+  ahead of the picture).
 - `src/player.js` — derives the visible cue from the clock each tick, so
   seeks, loops, and pause/resume need no special cases.
 - `src/renderer.js` — **the Meta seam.** `LensRenderer` is four methods:
