@@ -37,6 +37,17 @@ The standard PDFs are © SMPTE, All Rights Reserved — they are research
 material only, gitignored, never committed. The code is our own clean-room
 implementation of the wire facts.
 
+## Simulated cinema server
+
+`sim_dcs.py` is a fake DCS for loopback testing: it speaks real ST 430-10
+over TCP (Announce first, then a scripted session), verifies every ACS
+response (Request ID echo, status codes), and serves the RPL and timed-text
+files over HTTP so the appliance fetches them for real. `tests/test_sim_dcs.py`
+runs the full session over real sockets: happy path, terminate reset,
+playout-ID mismatch, bad request, RPL playout mismatch. To watch a session:
+
+    python3 appliance/run_sim_session.py
+
 ## What's still bench-gated (honest list)
 
 1. **DCS quirks in the wild.** The protocol is standard; individual servers
