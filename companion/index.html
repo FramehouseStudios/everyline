@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>everyline</title>
 <meta name="theme-color" content="#000000">
-<meta name="description" content="Live movie captions on your glasses.">
+<meta name="description" content="Live movie captions on your glasses. At the theater or at home.">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -15,18 +15,49 @@
   <div class="join-card">
     <h1>everyline</h1>
     <p class="tagline">Every line of the film, in your lens.</p>
-    <label>Backend
-      <input id="backend-url" inputmode="url" placeholder="https://backend.example.com" autocomplete="off">
-    </label>
-    <label>Theater ID
-      <input id="theater-id" placeholder="from your ticket or the QR at your seat" autocomplete="off">
-    </label>
-    <label>Operator token
-      <input id="operator-token" type="password" placeholder="temporary in v1" autocomplete="off">
-    </label>
-    <button id="find-btn">Find showtimes</button>
+
+    <div class="mode-row" role="tablist" aria-label="Where are you watching?">
+      <button class="mode-card active" data-mode="theater" role="tab" aria-selected="true">
+        <strong>Theater</strong><span>Captions from the projection booth</span>
+      </button>
+      <button class="mode-card" data-mode="home" role="tab" aria-selected="false">
+        <strong>Home</strong><span>Captions from your home bridge</span>
+      </button>
+      <button class="mode-card" data-mode="demo" role="tab" aria-selected="false">
+        <strong>Demo</strong><span>Try it right now, no setup</span>
+      </button>
+    </div>
+
+    <div id="panel-theater" class="mode-panel active">
+      <label>Backend
+        <input id="backend-url" inputmode="url" placeholder="https://backend.example.com" autocomplete="off">
+      </label>
+      <label>Theater ID
+        <input id="theater-id" placeholder="from your ticket or the QR at your seat" autocomplete="off">
+      </label>
+      <label>Operator token
+        <input id="operator-token" type="password" placeholder="temporary in v1" autocomplete="off">
+      </label>
+      <button id="find-btn">Find showtimes</button>
+      <p class="muted">In the theater? Scan the QR at your seat — it fills this in.</p>
+    </div>
+
+    <div id="panel-home" class="mode-panel">
+      <label>Home bridge
+        <input id="bridge-url" inputmode="url" placeholder="ws://192.168.1.5:8787/cue" autocomplete="off">
+      </label>
+      <button id="home-connect-btn">Connect</button>
+      <p class="muted">Run the home bridge on your network, then connect to it. It serves
+      your Plex library or a synced SRT over the same protocol the booth uses.</p>
+    </div>
+
+    <div id="panel-demo" class="mode-panel">
+      <p class="muted">A ninety second scene plays on this phone, captions and all.
+      No booth, no backend, no account.</p>
+      <button id="demo-start-btn">Start the demo</button>
+    </div>
+
     <p id="join-error" class="error" role="alert"></p>
-    <p class="muted">In the theater? Scan the QR at your seat — it fills this in.</p>
   </div>
 </main>
 
@@ -41,9 +72,18 @@
 <main id="screen-live" class="screen">
   <div id="lens">
     <div class="status-line" aria-live="polite"></div>
-    <div class="cue-wrap"><p class="cue-text"></p></div>
+    <div class="cue-wrap"><p class="cue-text" aria-live="polite"></p></div>
+    <div id="demo-bar" class="hidden">
+      <button id="demo-play" class="ghost">Play</button>
+      <button id="demo-restart" class="ghost">Restart</button>
+    </div>
     <div class="live-bar">
       <div class="lang-row" role="group" aria-label="Caption language"></div>
+      <div class="cap-size" role="group" aria-label="Caption size">
+        <button id="cap-dec" class="ghost" aria-label="Smaller captions">A−</button>
+        <span id="cap-size-label" aria-hidden="true">M</span>
+        <button id="cap-inc" class="ghost" aria-label="Larger captions">A+</button>
+      </div>
       <button id="leave-btn" class="ghost">Leave</button>
     </div>
   </div>

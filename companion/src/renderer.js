@@ -39,7 +39,9 @@ export class WebRenderer {
     else if (state === 'reconnecting') bits.push('reconnecting…');
     else if (state === 'closed') bits.push('disconnected');
     if (lang) bits.push(lang.toUpperCase());
+    // Honest source badges: simulated and demo sources say so.
     if (source === 'simulated') bits.push('(simulated booth)');
+    else if (source === 'demo') bits.push('(demo)');
     this.statusEl.textContent = bits.join(' · ');
     this.statusEl.classList.toggle('warn', state === 'reconnecting' || state === 'connecting');
   }

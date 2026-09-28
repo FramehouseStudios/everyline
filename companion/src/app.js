@@ -1,41 +1,41 @@
 // everyline companion: patron app wiring.
 //
-// Join -> discovery -> booth stream -> lens. The state machine above the
-// renderer: BoothStream (protocol v0) -> BoothClock (booth is the clock) ->
-// CuePlayer (what's visible) -> LensRenderer (pixels). The renderer is the
-// only piece that changes when the Meta Wearables SDK arrives.
+// Three ways to watch, one rendering pipeline:
+//   theater -> BoothStream over WebSocket to the booth appliance
+//   home    -> BoothStream over WebSocket to the home bridge (same protocol)
+//   demo    -> DemoSource, a virtual booth on the phone itself
+// All three feed BoothClock -> CuePlayer -> LensRenderer. The renderer is
+// the only piece that changes when the Meta Wearables SDK arrives.
 
 import { BoothClock } from './clock.js';
 import { CuePlayer } from './player.js';
 import { WebRenderer } from './renderer.js';
 import { BoothStream } from './stream.js';
+import { DemoSource } from './source.js';
+import { parseSrt } from './srt.js';
 
 const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
 
 const store = {
   get(k) {
-    try {
-      return localStorage.getItem('everyline.' + k);
-    } catch {
-      return null;
-    }
+    try { return localStorage.getItem('everyline.' + k); } catch { return null; }
   },
   set(k, v) {
-    try {
-      localStorage.setItem('everyline.' + k, v);
-    } catch {
-      /* private mode */
-    }
+    try { localStorage.setItem('everyline.' + k, v); } catch { /* private mode */ }
   },
 };
 
-const clock = new BoothClock();
+let clock = new BoothClock();
 let player = null;
 let renderer = null;
-let stream = null;
+let source = null;
 let raf = 0;
 let currentTitle = '';
+let currentSource = '';
+let mode = 'theater';
+
+const CAP_SIZES = ['s', 'm', 'l'];
 
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach((s) =>
@@ -54,39 +54,48 @@ function backendBase() {
   return $('#backend-url').value.trim().replace(/\/+$/, '');
 }
 
-async function startLive(aud) {
+// ---------- live ----------
+
+function makeHandlers() {
+  return {
+    onWelcome: (m) => {
+      currentTitle = m.showing?.title || '';
+      currentSource = m.source || '';
+      renderer.setStatus({ state: 'live', title: currentTitle, source: currentSource });
+      renderLanguages(m.languages && m.languages.length ? m.languages : ['en']);
+    },
+    onCue: (m) => player.pushCue(m),
+    onTransport: (m) => {
+      clock.onTransport(m, Date.now());
+      renderer.setStatus({ state: 'live', title: currentTitle, lang: player.lang, source: currentSource });
+    },
+    onStatus: (s) =>
+      renderer.setStatus({ state: s, title: currentTitle, lang: player?.lang, source: currentSource }),
+    onLanguage: (lang) => {
+      player.setLanguage(lang);
+      renderer.setLang(lang);
+      renderer.setStatus({ state: 'live', title: currentTitle, lang, source: currentSource });
+    },
+  };
+}
+
+function startLive({ label, makeSource, url, demo = false }) {
+  clock = new BoothClock();
+  currentTitle = label;
+  currentSource = '';
   showScreen('live');
+  $('#demo-bar').classList.toggle('hidden', !demo);
   renderer = new WebRenderer($('#lens'));
-  renderer.setStatus({ state: 'connecting', title: aud.currentShow?.title });
+  renderer.setStatus({ state: 'connecting', title: label });
   player = new CuePlayer({
     clock,
     onDisplay: (cue) => renderer.showCue(cue),
     onClear: () => renderer.clear(),
   });
-  stream = new BoothStream({
-    wsImpl: WebSocket,
-    handlers: {
-      onWelcome: (m) => {
-        currentTitle = m.showing?.title || '';
-        renderer.setStatus({ state: 'live', title: currentTitle, source: m.source });
-        renderLanguages(m.languages && m.languages.length ? m.languages : ['en']);
-      },
-      onCue: (m) => player.pushCue(m),
-      onTransport: (m) => {
-        clock.onTransport(m, Date.now());
-        renderer.setStatus({ state: 'live', title: currentTitle, lang: player.lang });
-      },
-      onStatus: (s) =>
-        renderer.setStatus({ state: s, title: currentTitle, lang: player?.lang }),
-      onLanguage: (lang) => {
-        player.setLanguage(lang);
-        renderer.setLang(lang);
-        renderer.setStatus({ state: stream.state, title: currentTitle, lang });
-      },
-    },
-  });
-  stream.connect(aud.cueStreamUrl);
-  stream.subscribe('en');
+  source = makeSource(makeHandlers());
+  source.connect(url);
+  source.subscribe('en');
+  if (demo) wireDemoControls();
   const loop = () => {
     player.tick();
     raf = requestAnimationFrame(loop);
@@ -94,11 +103,28 @@ async function startLive(aud) {
   loop();
 }
 
+function wireDemoControls() {
+  const playBtn = $('#demo-play');
+  const update = () => { playBtn.textContent = source.playing ? 'Pause' : 'Play'; };
+  playBtn.onclick = () => {
+    if (source.playing) source.pause();
+    else source.play();
+    update();
+  };
+  $('#demo-restart').onclick = () => {
+    source.seek(0);
+    source.play();
+    update();
+  };
+  update();
+}
+
 function stopLive() {
   cancelAnimationFrame(raf);
-  if (stream) stream.close();
-  stream = player = renderer = null;
+  if (source) source.close();
+  source = player = renderer = null;
   currentTitle = '';
+  currentSource = '';
   showScreen('join');
 }
 
@@ -109,11 +135,14 @@ function renderLanguages(langs) {
     const b = document.createElement('button');
     b.textContent = lang.toUpperCase();
     b.dataset.lang = lang;
+    b.setAttribute('aria-label', `Captions in ${lang}`);
     if (lang === 'en') b.classList.add('active');
-    b.addEventListener('click', () => stream && stream.subscribe(lang));
+    b.addEventListener('click', () => source && source.subscribe(lang));
     row.appendChild(b);
   });
 }
+
+// ---------- theater ----------
 
 function renderAuditoriums(d) {
   $('#aud-theater-name').textContent = d.theater.name;
@@ -127,7 +156,12 @@ function renderAuditoriums(d) {
     const badge = aud.captionsAvailable ? 'captions live' : 'no captions';
     card.innerHTML = `<strong>${aud.name}</strong><span>${show}</span><em>${badge}</em>`;
     if (aud.captionsAvailable) {
-      card.addEventListener('click', () => startLive(aud));
+      card.addEventListener('click', () =>
+        startLive({
+          label: aud.currentShow?.title || aud.name,
+          makeSource: (h) => new BoothStream({ wsImpl: WebSocket, handlers: h }),
+          url: aud.cueStreamUrl,
+        }));
     }
     list.appendChild(card);
   });
@@ -158,35 +192,121 @@ async function findShowtimes() {
   }
 }
 
+// ---------- home ----------
+
+function connectHome(url) {
+  setJoinError('');
+  url = (url || $('#bridge-url').value).trim();
+  if (!url) {
+    setJoinError('Enter your bridge address.');
+    return;
+  }
+  store.set('bridge', url);
+  startLive({
+    label: 'Home',
+    makeSource: (h) => new BoothStream({ wsImpl: WebSocket, handlers: h }),
+    url,
+  });
+}
+
+// ---------- demo ----------
+
+async function startDemo() {
+  setJoinError('');
+  try {
+    const [en, es] = await Promise.all([
+      fetch('captions.en.srt').then((r) => {
+        if (!r.ok) throw new Error('en');
+        return r.text();
+      }),
+      fetch('captions.es.srt').then((r) => {
+        if (!r.ok) throw new Error('es');
+        return r.text();
+      }),
+    ]);
+    const tracks = { en: parseSrt(en), es: parseSrt(es) };
+    if (!tracks.en.length) throw new Error('empty');
+    startLive({
+      label: 'The Long Room',
+      makeSource: (h) => new DemoSource({ handlers: h, tracks }),
+      demo: true,
+    });
+    source.play();
+    $('#demo-play').textContent = 'Pause';
+  } catch {
+    setJoinError('Could not load the demo captions. Serve this folder over HTTP and try again.');
+  }
+}
+
+// ---------- join screen ----------
+
+function selectMode(next) {
+  mode = next;
+  document.querySelectorAll('.mode-card').forEach((c) =>
+    c.classList.toggle('active', c.dataset.mode === next));
+  document.querySelectorAll('.mode-panel').forEach((p) =>
+    p.classList.toggle('active', p.id === `panel-${next}`));
+  setJoinError('');
+}
+
+function applyCapSize(size) {
+  const lens = $('#lens');
+  lens.classList.remove('cap-s', 'cap-m', 'cap-l');
+  lens.classList.add(`cap-${size}`);
+  store.set('capSize', size);
+  $('#cap-size-label').textContent = size.toUpperCase();
+}
+
 function init() {
   $('#backend-url').value = params.get('backend') || store.get('backend') || '';
   $('#operator-token').value = params.get('token') || store.get('token') || '';
   $('#theater-id').value = params.get('theater') || store.get('theater') || '';
+  $('#bridge-url').value = params.get('bridge') || store.get('bridge') || '';
+
+  document.querySelectorAll('.mode-card').forEach((c) =>
+    c.addEventListener('click', () => selectMode(c.dataset.mode)));
 
   $('#find-btn').addEventListener('click', findShowtimes);
+  $('#home-connect-btn').addEventListener('click', () => connectHome());
+  $('#demo-start-btn').addEventListener('click', startDemo);
   $('#back-btn').addEventListener('click', () => showScreen('join'));
   $('#leave-btn').addEventListener('click', stopLive);
 
-  // Deep link (?backend=&token=&theater=&auditorium=): straight to the film.
-  const deepAud = params.get('auditorium');
-  if (configReady() && deepAud) {
+  $('#cap-dec').addEventListener('click', () => {
+    const cur = store.get('capSize') || 'm';
+    applyCapSize(CAP_SIZES[(CAP_SIZES.indexOf(cur) + CAP_SIZES.length - 1) % CAP_SIZES.length]);
+  });
+  $('#cap-inc').addEventListener('click', () => {
+    const cur = store.get('capSize') || 'm';
+    applyCapSize(CAP_SIZES[(CAP_SIZES.indexOf(cur) + 1) % CAP_SIZES.length]);
+  });
+  applyCapSize(store.get('capSize') || 'm');
+
+  // Deep links.
+  const deepSource = params.get('source');
+  if (deepSource === 'demo') {
+    startDemo();
+  } else if (deepSource === 'home' && (params.get('bridge') || store.get('bridge'))) {
+    selectMode('home');
+    connectHome(params.get('bridge') || store.get('bridge'));
+  } else if ($('#backend-url').value && params.get('theater') && params.get('auditorium')) {
     (async () => {
       try {
         const res = await fetch(
           `${backendBase()}/v1/discovery?theaterId=${encodeURIComponent($('#theater-id').value.trim())}`,
           { headers: authHeaders() });
         const d = await res.json();
-        const aud = d.auditoriums.find((a) => a.id === deepAud);
-        if (aud && aud.captionsAvailable) startLive(aud);
-      } catch {
-        /* fall through to the join screen */
-      }
+        const aud = d.auditoriums.find((a) => a.id === params.get('auditorium'));
+        if (aud && aud.captionsAvailable) {
+          startLive({
+            label: aud.currentShow?.title || aud.name,
+            makeSource: (h) => new BoothStream({ wsImpl: WebSocket, handlers: h }),
+            url: aud.cueStreamUrl,
+          });
+        }
+      } catch { /* fall through to the join screen */ }
     })();
   }
-}
-
-function configReady() {
-  return $('#backend-url').value.trim() && $('#theater-id').value.trim();
 }
 
 init();

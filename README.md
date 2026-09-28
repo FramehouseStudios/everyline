@@ -39,8 +39,15 @@ The theater keeps its projector. The patron keeps their dignity.
 - `companion/` — the patron phone app (PWA): join via discovery, subscribe
   to the booth's cue stream, and render captions. The booth is the clock;
   the renderer is the seam where the Meta Wearables Display SDK plugs in.
-  `npm install && npm test` (13 tests), verified end-to-end against the
-  demo booth.
+  `npm install && npm test` (15 tests), verified end-to-end against the
+  demo booth. Three modes: Theater, Home, and a self-contained Demo that
+  runs with no booth, no backend, no network.
+- `home-bridge/` — the booth, for the living room. Serves captions over the
+  same Cue Stream Protocol v0 from two providers: manual tap-to-sync SRT
+  (works with any source: Netflix, Blu-ray, a file) and Plex true sync
+  (position + subtitles from Plex's session API). The companion talks to it
+  with zero new code. `npm install && npm test` (7 tests); `npm start`
+  serves on :8787 with the cue stream at `/cue`.
 
 ## The honest version
 
