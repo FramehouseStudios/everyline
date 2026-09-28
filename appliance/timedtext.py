@@ -29,6 +29,15 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _guard_xml(xml_text: str):
+    # ElementTree never resolves external entities, but internal entity
+    # expansion (billion laughs) is a real DoS on network-sourced XML.
+    # Both the RPL and timed-text arrive over the booth LAN; refuse any
+    # document that declares entities.
+    if "<!ENTITY" in xml_text.upper():
+        raise ValueError("XML entity declarations are not allowed")
+
+
 def parse_timecode(tc: str, edit_rate: float = 24.0) -> int:
     """Parse HH:MM:SS:FF (frames at edit_rate), HH:MM:SS.mmm, or plain seconds."""
     tc = tc.strip()
@@ -61,8 +70,11 @@ def _texts(subtitle_el) -> str:
     return "\n".join(parts)
 
 
-def parse_4287(xml_text: str, language: str = "en") -> list[Cue]:
-    """SMPTE ST 428-7 (2010 and 2014 namespaces)."""
+def parse_4287(xml_text: str, language: str = "en",
+               warnings: list = None) -> list[Cue]:
+    """SMPTE ST 428-7 (2010 and 2014 namespaces). One malformed cue is
+    skipped with a warning; it never kills the whole language track."""
+    _guard_xml(xml_text)
     root = ET.fromstring(xml_text)
     if _local(root.tag) != "SubtitleReel":
         raise ValueError(f"expected SubtitleReel, got {_local(root.tag)!r}")
@@ -80,11 +92,16 @@ def parse_4287(xml_text: str, language: str = "en") -> list[Cue]:
         text = _texts(sub)
         if not text:
             continue
-        cues.append(Cue(
-            start_ms=parse_timecode(tin, edit_rate),
-            end_ms=parse_timecode(tout, edit_rate),
-            text=text, language=language,
-        ))
+        try:
+            start_ms = parse_timecode(tin, edit_rate)
+            end_ms = parse_timecode(tout, edit_rate)
+        except ValueError as e:
+            if warnings is not None:
+                warnings.append(f"skipping malformed cue "
+                                f"({tin!r}->{tout!r}): {e}")
+            continue
+        cues.append(Cue(start_ms=start_ms, end_ms=end_ms,
+                        text=text, language=language))
     cues.sort(key=lambda c: c.start_ms)
     return cues
 
@@ -96,8 +113,11 @@ def _cinecanvas_ms(value: str) -> int:
     return parse_timecode(v)
 
 
-def parse_cinecanvas(xml_text: str, language: str = "en") -> list[Cue]:
-    """Interop CineCanvas (DCSubtitle). Times are ticks (1 tick = 4 ms) or timecode."""
+def parse_cinecanvas(xml_text: str, language: str = "en",
+                     warnings: list = None) -> list[Cue]:
+    """Interop CineCanvas (DCSubtitle). Times are ticks (1 tick = 4 ms) or timecode.
+    One malformed cue is skipped with a warning; it never kills the track."""
+    _guard_xml(xml_text)
     root = ET.fromstring(xml_text)
     if _local(root.tag) != "DCSubtitle":
         raise ValueError(f"expected DCSubtitle, got {_local(root.tag)!r}")
@@ -111,21 +131,27 @@ def parse_cinecanvas(xml_text: str, language: str = "en") -> list[Cue]:
         text = _texts(sub)
         if not text:
             continue
-        cues.append(Cue(
-            start_ms=_cinecanvas_ms(tin),
-            end_ms=_cinecanvas_ms(tout),
-            text=text, language=language,
-        ))
+        try:
+            start_ms, end_ms = _cinecanvas_ms(tin), _cinecanvas_ms(tout)
+        except ValueError as e:
+            if warnings is not None:
+                warnings.append(f"skipping malformed cue "
+                                f"({tin!r}->{tout!r}): {e}")
+            continue
+        cues.append(Cue(start_ms=start_ms, end_ms=end_ms,
+                        text=text, language=language))
     cues.sort(key=lambda c: c.start_ms)
     return cues
 
 
-def parse_timed_text(xml_text: str, language: str = "en") -> list[Cue]:
+def parse_timed_text(xml_text: str, language: str = "en",
+                     warnings: list = None) -> list[Cue]:
     """Auto-detect format by root element."""
+    _guard_xml(xml_text)
     root = ET.fromstring(xml_text)
     name = _local(root.tag)
     if name == "SubtitleReel":
-        return parse_4287(xml_text, language)
+        return parse_4287(xml_text, language, warnings)
     if name == "DCSubtitle":
-        return parse_cinecanvas(xml_text, language)
+        return parse_cinecanvas(xml_text, language, warnings)
     raise ValueError(f"unrecognized timed-text root element: {name!r}")

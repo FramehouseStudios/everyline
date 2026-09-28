@@ -82,6 +82,9 @@ class RplDocument:
 
 def parse_rpl(xml_text: str) -> RplDocument:
     doc = RplDocument()
+    # Billion-laughs guard: the RPL arrives over the booth LAN.
+    if "<!ENTITY" in xml_text.upper():
+        raise ValueError("RPL declares XML entities; refusing")
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:

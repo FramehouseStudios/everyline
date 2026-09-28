@@ -68,6 +68,19 @@ class TestRpl(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_rpl("<not xml")
 
+    def test_entity_declaration_refused(self):
+        xml = ('<rpl:ResourcePresentationList '
+               'xmlns:rpl="http://www.smpte-ra.org/schemas/430-11/2010/RPL">'
+               '<!DOCTYPE x [<!ENTITY e "x">]>'
+               '</rpl:ResourcePresentationList>')
+        with self.assertRaises(ValueError):
+            parse_rpl(xml)
+
+    def test_duration_parsed(self):
+        # Fixture: 129600 edit units @24fps = 5400 s playable region.
+        doc = parse_rpl(open(FIX).read())
+        self.assertEqual(doc.resources[0].duration_ms, 5400000)
+
 
 if __name__ == "__main__":
     unittest.main()

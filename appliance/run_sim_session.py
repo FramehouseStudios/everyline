@@ -52,7 +52,8 @@ def main():
     steps = [
         ("announce",),
         ("get_new_lease",),
-        ("set_rpl_location", 424242),
+        ("set_rpl_location", 424242, 10),  # Processing; DCS polls per Annex B
+        ("poll_until_ready",),
         ("set_output_mode", True),
         ("update_timeline", 424242, 24),     # 1 s
         ("sleep", 0.3),
@@ -91,7 +92,8 @@ def main():
         t.join(timeout=10)
         sim.stop()
     print("[done] session complete; "
-          f"{len(sim.responses)} wire exchanges, all status 0")
+          f"{len(sim.responses)} wire exchanges, "
+          f"{sum(1 for r in sim.responses if r[2] not in (0, 10))} errors")
 
 
 if __name__ == "__main__":

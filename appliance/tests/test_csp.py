@@ -74,6 +74,9 @@ class FakeSocket:
     def sendall(self, data):
         self.out += data
 
+    def close(self):
+        pass
+
     def setblocking(self, flag):
         pass
 
@@ -204,21 +207,27 @@ class TestCodec(unittest.TestCase):
 
 class TestSessionOverWire(unittest.TestCase):
     def full_session(self, c):
-        wire = b"".join([
+        c._sock = FakeSocket(b"".join([
             req("announce_req", u32(1) + i64(1700000000) + b"GDC SR-1000"),
             req("get_new_lease_req", u32(2) + u32(60)),
             req("set_rpl_location_req",
                 u32(3) + u32(424242) + RPL_URL.encode()),
+        ]))
+        self.assertEqual(c.pump(), 3)
+        first = drain(c._sock.out)
+        # The RPL fetch runs on a background thread; a real DCS would poll
+        # Get Status (Annex B). The harness just waits for it to land.
+        self.assertTrue(c.join_fetch())
+        c._sock = FakeSocket(b"".join([
             # 24 edit units @24fps = 1 s -> position 1000 ms
             req("update_timeline_req",
                 update_timeline_payload(4, 424242, 24)),
             req("set_output_mode_req", u32(5) + bytes([1])),
             req("update_timeline_req",
                 update_timeline_payload(6, 424242, 48)),
-        ])
-        c._sock = FakeSocket(wire)
-        self.assertEqual(c.pump(), 6)
-        return drain(c._sock.out)
+        ]))
+        self.assertEqual(c.pump(), 3)
+        return first + drain(c._sock.out)
 
     def test_full_session(self):
         c = client()
@@ -229,7 +238,9 @@ class TestSessionOverWire(unittest.TestCase):
             "update_timeline_resp", "set_output_mode_resp",
             "update_timeline_resp",
         ])
-        self.assertTrue(all(code == 0 for _, _, code, _, _ in resps))
+        # Set RPL Location answers Processing (Annex B); the rest are OK.
+        self.assertEqual([code for _, _, code, _, _ in resps],
+                         [0, 0, STATUS["processing"], 0, 0, 0])
         self.assertEqual([r[1] for r in resps], [1, 2, 3, 4, 5, 6])  # echoed
         self.assertEqual(c.lease_seconds, 60)
         self.assertEqual(c.state, "playing")
@@ -277,9 +288,10 @@ class TestSessionOverWire(unittest.TestCase):
         ])
         c._sock = FakeSocket(wire)
         self.assertEqual(c.pump(), 4)
+        self.assertTrue(c.join_fetch())
         resps = drain(c._sock.out)
         self.assertEqual(resps[2][2], STATUS["playout_id_mismatch"])
-        self.assertEqual(resps[3][2], STATUS["success"])
+        self.assertEqual(resps[3][2], STATUS["processing"])
         # 2400 edit units @24fps = 100 s
         self.assertEqual(c.position_ms, 100000)
 
@@ -295,13 +307,20 @@ class TestSessionOverWire(unittest.TestCase):
         ])
         c._sock = FakeSocket(wire)
         self.assertEqual(c.pump(), 3)
+        self.assertTrue(c.join_fetch())
         resps = drain(c._sock.out)
-        self.assertEqual(resps[2][2], STATUS["rpl_error"])
+        # Processing on the wire; the mismatch surfaces when the fetch lands.
+        self.assertEqual(resps[2][2], STATUS["processing"])
+        self.assertEqual(c.state, "empty")
         self.assertEqual(c.cues_by_lang, {})
+        self.assertTrue(any("PlayoutID" in w for w in c.warnings))
 
     def test_relative_url_resolves_against_dcs_host(self):
-        fmap = dict(files())
-        fmap["http://10.0.1.9/rpl.xml"] = fmap.pop(RPL_URL)
+        # The whole asset set lives on the DCS host: absolute URLs to any
+        # other host are refused (SSRF guard), so the fixture is remapped.
+        fmap = {url.replace("http://dcs.local", "http://10.0.1.9"):
+                body.replace("http://dcs.local", "http://10.0.1.9")
+                for url, body in files().items()}
         c = client(files_map=fmap)
         c._dcs_host = "10.0.1.9"
         wire = b"".join([
@@ -311,9 +330,30 @@ class TestSessionOverWire(unittest.TestCase):
         ])
         c._sock = FakeSocket(wire)
         self.assertEqual(c.pump(), 3)
+        self.assertTrue(c.join_fetch())
         resps = drain(c._sock.out)
-        self.assertEqual(resps[2][2], STATUS["success"])
+        self.assertEqual(resps[2][2], STATUS["processing"])
         self.assertEqual(c.rpl_url, "http://10.0.1.9/rpl.xml")
+        self.assertEqual(sorted(c.cues_by_lang.keys()), ["en", "es"])
+
+    def test_absolute_url_to_foreign_host_refused(self):
+        c = client()
+        c._dcs_host = "10.0.1.9"  # connected DCS
+        wire = b"".join([
+            req("announce_req", u32(1) + i64(1) + b"DCS"),
+            req("get_new_lease_req", u32(2) + u32(60)),
+            # RPL itself points off-host: refused before any fetch.
+            req("set_rpl_location_req",
+                u32(3) + u32(424242) + b"http://evil.example/rpl.xml"),
+        ])
+        c._sock = FakeSocket(wire)
+        self.assertEqual(c.pump(), 3)
+        resps = drain(c._sock.out)
+        # Refused synchronously: no fetch thread is ever started.
+        self.assertEqual(resps[2][2], STATUS["rpl_error"])
+        self.assertEqual(c.state, "empty")
+        self.assertIsNone(c._fetch_thread)
+        self.assertTrue(any("not the DCS host" in w for w in c.warnings))
 
     def test_dead_rpl_url_gives_rpl_error(self):
         c = client(files_map={})
@@ -323,9 +363,12 @@ class TestSessionOverWire(unittest.TestCase):
             req("set_rpl_location_req", u32(3) + u32(424242) + RPL_URL.encode()),
         ]))
         self.assertEqual(c.pump(), 3)
+        self.assertTrue(c.join_fetch())
         resps = drain(c._sock.out)
-        self.assertEqual(resps[2][2], STATUS["rpl_error"])
+        # Processing on the wire; the dead URL surfaces when the fetch lands.
+        self.assertEqual(resps[2][2], STATUS["processing"])
         self.assertEqual(c.state, "empty")
+        self.assertTrue(any("RPL fetch/parse failed" in w for w in c.warnings))
 
     def test_unknown_ul_gets_bad_request(self):
         c = client()
@@ -379,6 +422,114 @@ class TestSessionOverWire(unittest.TestCase):
             req("get_status_req", u32(1)))
         self.assertEqual(c.pump(), 1)
         self.assertTrue(any("before Announce" in w for w in c.warnings))
+
+    def test_zero_edit_rate_numerator_does_not_crash(self):
+        c = client()
+        self.full_session(c)
+        wire = req("update_timeline_req",
+                   update_timeline_payload(9, 424242, 48, 0, 1))
+        c._sock = FakeSocket(wire)
+        self.assertEqual(c.pump(), 1)
+        [(name, _, code, _, _)] = drain(c._sock.out)
+        self.assertEqual((name, code), ("update_timeline_resp",
+                                        STATUS["success"]))
+        self.assertEqual(c.position_ms, 2000)  # not advanced
+        self.assertTrue(any("numerator" in w for w in c.warnings))
+
+    def test_handler_crash_answered_as_bad_request(self):
+        c = client()
+
+        def boom(request_id):
+            raise RuntimeError("simulated handler bug")
+        c.on_get_status = boom
+        c._sock = FakeSocket(req("get_status_req", u32(1)))
+        self.assertEqual(c.pump(), 1)
+        [(name, _, code, _, _)] = drain(c._sock.out)
+        self.assertEqual((name, code), ("bad_request_resp",
+                                        STATUS["invalid"]))
+        self.assertTrue(any("handler failed" in w for w in c.warnings))
+
+    def test_malformed_framing_drops_connection(self):
+        c = client()
+        key = bytes([0x06, 0x0E, 0x2B, 0x34, 0x02, 0x05, 0x01, 0x01,
+                     0x02, 0x07, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00])
+        c._sock = FakeSocket(key + b"\x80" + b"junk")  # indefinite BER length
+        with self.assertRaises(ConnectionError):
+            c.pump()
+        self.assertIsNone(c._sock)  # closed, not left half-open
+        self.assertTrue(any("framing" in w for w in c.warnings))
+
+    def test_clean_close_closes_socket(self):
+        c = client()
+        sock = FakeSocket(req("get_status_req", u32(1)))
+        sock.recv = lambda n: b""  # clean FIN
+        c._sock = sock
+        with self.assertRaises(ConnectionError):
+            c.pump()
+        self.assertIsNone(c._sock)
+
+    def test_lease_expiry_purges_session(self):
+        now = [1000.0]
+        c = client(clock=lambda: now[0])
+        self.full_session(c)
+        self.assertEqual(c.state, "playing")
+        now[0] += 61  # past the 60 s lease, no renewal arrived
+        c._sock = FakeSocket(b"")
+        c.pump()
+        self.assertEqual(c.state, "idle")
+        self.assertEqual(c.cues_by_lang, {})
+        self.assertIsNone(c.playout_id)
+        self.assertTrue(any("lease expired" in w for w in c.warnings))
+
+    def test_send_backpressure_buffers_and_retries(self):
+        c = client()
+        sock = FakeSocket(req("get_status_req", u32(1)))
+        blocked = [True]
+        orig_sendall = sock.sendall
+
+        def flaky_sendall(data):
+            if blocked[0]:
+                raise BlockingIOError()
+            orig_sendall(data)
+        sock.sendall = flaky_sendall
+        c._sock = sock
+        self.assertEqual(c.pump(), 1)  # response buffered, not lost
+        self.assertTrue(c._send_pending)
+        blocked[0] = False
+        self.assertEqual(c.pump(), 0)  # flush on the next pump
+        self.assertFalse(c._send_pending)
+        [(name, rid, code, _, _)] = drain(sock.out)
+        self.assertEqual((name, rid, code), ("get_status_resp", 1, 0))
+
+    def test_stale_fetch_result_discarded(self):
+        c = client()
+        c._sock = FakeSocket(b"".join([
+            req("announce_req", u32(1) + i64(1) + b"DCS"),
+            req("get_new_lease_req", u32(2) + u32(60)),
+            req("set_rpl_location_req",
+                u32(3) + u32(424242) + RPL_URL.encode()),
+        ]))
+        self.assertEqual(c.pump(), 3)
+        # A terminate landing before the fetch completes kills the session;
+        # the late fetch result must not resurrect it (generation guard).
+        c._sock = FakeSocket(req("terminate_lease_req", u32(4)))
+        self.assertEqual(c.pump(), 1)
+        self.assertTrue(c.join_fetch())
+        self.assertEqual(c.state, "idle")
+        self.assertEqual(c.cues_by_lang, {})
+
+    def test_event_log_is_capped(self):
+        c = client()
+        for i in range(25000):
+            c.log_event(f"e{i}")
+        self.assertLessEqual(len(c._events), 20000)
+        # ...but the log-event query path still works.
+        c._sock = FakeSocket(
+            req("get_log_event_list_req", u32(1) + i64(0) + i64(9999999999)))
+        self.assertEqual(c.pump(), 1)
+        [(name, _, code, _, extra)] = drain(c._sock.out)
+        self.assertEqual(code, 0)
+        self.assertTrue(extra["event_ids"])
 
 
 if __name__ == "__main__":

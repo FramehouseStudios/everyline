@@ -189,6 +189,34 @@ class SimDcs:
         payload = _u32(rid) + bytes([1 if enabled else 0])
         return self._send_request("set_output_mode_req", payload)
 
+    def send_get_status(self):
+        # Annex B: while the RPL fetch is in flight the ACS answers
+        # Processing (10); once loaded it answers Success (0).
+        rid = self._next_rid
+        self._next_rid += 1
+        b12, b13, _ = MESSAGES["get_status_req"]
+        self._conn.sendall(encode_message(b12, b13, _u32(rid)))
+        resp_name, request_id, code, text = self._read_response()
+        assert request_id == rid, \
+            f"get_status_req: ACS did not echo Request ID"
+        assert code in (STATUS["success"], STATUS["processing"]), \
+            f"get_status_req: expected status 0/10, got {code} ({text})"
+        return resp_name, code, text
+
+    def poll_until_ready(self, timeout=10.0):
+        """Annex B: after a Processing answer, poll Get Status until the ACS
+        leaves 'fetching' (ready, empty, or playing). Returns the final
+        state text."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            _, code, text = self.send_get_status()
+            assert code in (STATUS["success"], STATUS["processing"]), \
+                f"get_status: expected 0/10, got {code} ({text})"
+            if "state=fetching" not in text:
+                return text
+            time.sleep(0.05)
+        raise TimeoutError("ACS stayed in 'fetching' past poll timeout")
+
     def send_terminate_lease(self):
         rid = self._next_rid
         return self._send_request("terminate_lease_req", _u32(rid))
@@ -206,6 +234,7 @@ class SimDcs:
         """Accept one ACS connection and run script steps.
 
         Steps: ("announce",), ("get_new_lease",), ("set_rpl_location", pid[, expect]),
+        ("poll_until_ready",),
         ("update_timeline", pid, pos[, num, den[, expect]]),
         ("set_output_mode", bool), ("garbage",), ("sleep", s),
         ("terminate_lease",).
@@ -222,6 +251,8 @@ class SimDcs:
                     pid = step[1]
                     expect = step[2] if len(step) > 2 else 0
                     self.send_set_rpl_location(pid, expect_code=expect)
+                elif op == "poll_until_ready":
+                    self.poll_until_ready()
                 elif op == "update_timeline":
                     _, pid, pos = step[0], step[1], step[2]
                     num = step[3] if len(step) > 3 else 24

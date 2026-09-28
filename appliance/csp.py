@@ -23,9 +23,11 @@ the session recovers when the RPL arrives.
 
 import socket
 import struct
+import threading
 import time
+from collections import deque
 from dataclasses import replace as _dc_replace
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from .klv import KLVReader
 from .rpl import parse_rpl
@@ -285,13 +287,21 @@ class CspClient:
         self._sock = None
         self._dcs_host = None
         self._reader = KLVReader()
-        self._events = []  # (event_id, epoch_s, text)
+        self._events = deque(maxlen=20000)  # (event_id, epoch_s, text)
         self._next_event_id = 1
         self._announced = False
+        # Guards session state shared with the background RPL fetch thread.
+        self._lock = threading.RLock()
+        self._generation = 0  # bumped on every session reset; stale fetches die
+        self._fetch_thread = None
+        self._send_pending = bytearray()  # response bytes backpressured by DCS
         self._reset_session()
 
     # ------------------------------------------------------------------ state
     def _reset_session(self):
+        # Any in-flight background RPL fetch belongs to the old session;
+        # bumping the generation makes its result land dead on arrival.
+        self._generation += 1
         self.playout_id = None
         self.rpl_url = None
         self.cues_by_lang = {}
@@ -327,10 +337,24 @@ class CspClient:
             return False
         return True
 
+    def _check_url(self, url: str) -> str:
+        """Refuse non-http(s) schemes and any host that is not the DCS we
+        connected to: the appliance must not fetch whatever a rogue DCS
+        points it at. Unconnected (bench/test) clients allow any host."""
+        scheme = urlparse(url).scheme.lower()
+        if scheme not in ("http", "https"):
+            raise ValueError(f"refusing non-http(s) resource URL {url!r}")
+        host = urlparse(url).hostname
+        if self._dcs_host and host != self._dcs_host:
+            raise ValueError(
+                f"resource host {host!r} is not the DCS host "
+                f"{self._dcs_host!r}; refusing")
+        return url
+
     def _resolve_url(self, url: str) -> str:
         # 7.2.4: a relative URL assumes HTTP and the DCS's IP as host.
         if url.startswith(("http://", "https://")):
-            return url
+            return self._check_url(url)
         if not self._dcs_host:
             raise ValueError(f"relative RPL URL {url!r} with no DCS host known")
         return f"http://{self._dcs_host}/{url.lstrip('/')}"
@@ -380,61 +404,110 @@ class CspClient:
             self.state = "empty"
             return self._respond("set_rpl_location_resp", request_id,
                                  "rpl_error", text=str(e))
+        # The RPL and its timed-text files are fetched on a background
+        # thread: over a live socket pump() must keep answering inside the
+        # 2 s ACS budget, so we reply Processing now and the DCS polls
+        # Get Status until the load lands (Annex B).
+        gen = self._generation
         self.state = "fetching"
+        self._fetch_thread = threading.Thread(
+            target=self._fetch_rpl_worker,
+            args=(gen, playout_id, self.rpl_url),
+            daemon=True, name="everyline-rpl-fetch")
+        self._fetch_thread.start()
+        return self._respond("set_rpl_location_resp", request_id,
+                             "processing",
+                             text="fetching RPL; poll Get Status")
 
+    def join_fetch(self, timeout: float = 30.0) -> bool:
+        """Wait for the background RPL fetch to land. Tests and the bench
+        harness use this; production code never needs it (Get Status polls)."""
+        t = self._fetch_thread
+        if t is None:
+            return True
+        t.join(timeout)
+        return not t.is_alive()
+
+    def _fetch_rpl_worker(self, gen: int, playout_id: int, rpl_url: str):
+        """Background: fetch + parse the RPL and its timed-text, then hand
+        the result to _finish_fetch. Never touches the socket."""
         try:
-            doc = parse_rpl(self.fetch(self.rpl_url))
+            doc = parse_rpl(self.fetch(rpl_url))
         except Exception as e:
-            self.warnings.append(f"RPL fetch/parse failed ({e}); no captions")
-            self.state = "empty"
-            return self._respond("set_rpl_location_resp", request_id,
-                                 "rpl_error", text=str(e)[:200])
-
+            self._finish_fetch(gen, error=f"RPL fetch/parse failed ({e})")
+            return
         # 7.2.4: verify the RPL's PlayoutID matches the request's.
         if doc.playout_id is not None and doc.playout_id != playout_id:
-            self.warnings.append(
-                f"RPL PlayoutID {doc.playout_id} != request {playout_id}")
-            self.state = "empty"
-            return self._respond("set_rpl_location_resp", request_id,
-                                 "rpl_error", text="playout id mismatch")
-
+            self._finish_fetch(
+                gen, error=f"RPL PlayoutID {doc.playout_id} != request "
+                           f"{playout_id}")
+            return
         cues = {}
+        fetch_warnings = []
         for res in doc.resources:
             try:
                 url = res.url if res.url.startswith(("http://", "https://")) \
                     else urljoin(rpl_url.rstrip("/") + "/", res.url)
-                parsed = parse_timed_text(self.fetch(url), res.language)
+                self._check_url(url)
+                pw = []
+                parsed = parse_timed_text(self.fetch(url), res.language, pw)
+                fetch_warnings.extend(pw)
             except Exception as e:
-                self.warnings.append(f"timed-text fetch/parse failed for "
-                                     f"{res.language} ({e}); language skipped")
+                fetch_warnings.append(
+                    f"timed-text fetch/parse failed for {res.language} ({e}); "
+                    f"language skipped")
                 continue
             # entry_point_ms is already show-relative: the reel's
             # TimelineOffset (show offset) plus the resource EntryPoint,
             # both converted from edit units via the reel's EditRate.
+            # 6.3.3.5: clip to the reel's playable region when known.
             offset = res.entry_point_ms
-            shifted = [_dc_replace(c, start_ms=c.start_ms + offset,
-                                   end_ms=c.end_ms + offset)
-                       for c in parsed]
-            cues.setdefault(res.language, []).extend(shifted)
+            limit = (offset + res.duration_ms
+                     if res.duration_ms is not None else None)
+            shifted = []
+            dropped = 0
+            for c in parsed:
+                s, e = c.start_ms + offset, c.end_ms + offset
+                if limit is not None and s >= limit:
+                    dropped += 1
+                    continue
+                if limit is not None and e > limit:
+                    e = limit
+                shifted.append(_dc_replace(c, start_ms=s, end_ms=e))
+            if dropped:
+                fetch_warnings.append(
+                    f"{dropped} cue(s) for {res.language} outside the reel's "
+                    f"playable region; dropped")
+            if shifted:
+                cues.setdefault(res.language, []).extend(shifted)
         for lang in cues:
             cues[lang].sort(key=lambda c: c.start_ms)
-        self.cues_by_lang = cues
-        self.warnings.extend(doc.warnings)
-        self.scheduler.load(cues, playout_id)
-        self.log_event(f"RPL loaded: {sorted(cues)} from {self.rpl_url}")
+        self._finish_fetch(gen, cues=cues,
+                           warnings=doc.warnings + fetch_warnings,
+                           rpl_url=rpl_url, playout_id=playout_id)
 
-        # Join-in-progress: a timeline arrived before the RPL did.
-        if self.pending_timeline is not None:
-            req_id, pid, pos, num, den = self.pending_timeline
-            self.pending_timeline = None
-            self._apply_timeline(req_id, pid, pos, num, den)
-
-        self.state = "ready" if cues else "empty"
-        if not cues:
-            return self._respond("set_rpl_location_resp", request_id,
-                                 "resource_error",
-                                 text="no caption resources survived")
-        return self._respond("set_rpl_location_resp", request_id, "success")
+    def _finish_fetch(self, gen: int, cues=None, warnings=(), rpl_url="",
+                      playout_id=None, error=None):
+        """Apply a finished background fetch, but only if the session it
+        belongs to is still current. Stale results die silently."""
+        with self._lock:
+            if gen != self._generation:
+                return  # superseded by a newer Set RPL Location / Terminate
+            if error is not None:
+                self.warnings.append(f"{error}; no captions")
+                self.state = "empty"
+                self.log_event(f"RPL load failed: {error}")
+                return
+            self.cues_by_lang = cues
+            self.warnings.extend(warnings)
+            self.scheduler.load(cues, playout_id)
+            self.log_event(f"RPL loaded: {sorted(cues)} from {rpl_url}")
+            # Join-in-progress: a timeline arrived before the RPL did.
+            if self.pending_timeline is not None:
+                req_id, pid, pos, num, den = self.pending_timeline
+                self.pending_timeline = None
+                self._apply_timeline(req_id, pid, pos, num, den)
+            self.state = "ready" if cues else "empty"
 
     def on_set_output_mode(self, request_id: int, enabled: bool):
         # Some servers never send this (bench note); output then stays off
@@ -452,9 +525,10 @@ class CspClient:
         """Convert edit units -> ms and drive the scheduler. Returns status."""
         if self.playout_id is None or not self._check_playout(playout_id):
             return "playout_id_mismatch"
-        if edit_rate_den == 0:
-            self.warnings.append("Update Timeline with edit-rate denominator 0; "
-                                 "position not advanced")
+        if edit_rate_den == 0 or edit_rate_num == 0:
+            self.warnings.append(
+                "Update Timeline with edit-rate numerator/denominator 0; "
+                "position not advanced")
             return "success"
         self.edit_rate = (edit_rate_num, edit_rate_den)
         # 7.2.6.3: edit units -> seconds via the rational edit rate.
@@ -548,10 +622,41 @@ class CspClient:
 
     # ------------------------------------------------------------- live socket
     def connect(self, host: str, port: int = PORT, timeout: float = 5.0):
-        """Open the TCP session to the DCS. The ACS initiates (6.1)."""
+        """Open the TCP session to the DCS. The ACS initiates (6.1).
+        Reconnecting is a fresh connect() call."""
         self._dcs_host = host
         self._sock = socket.create_connection((host, port), timeout=timeout)
         self._sock.setblocking(False)
+
+    def _close(self):
+        """Drop the DCS connection and reset the session. A new Announce
+        on a fresh connect() restarts cleanly."""
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        self._reader = KLVReader()
+        self._send_pending.clear()
+
+    def _send(self, data: bytes):
+        """Send response bytes on the non-blocking socket, buffering across
+        backpressure so RRP order is preserved."""
+        if self._send_pending:
+            data = bytes(self._send_pending) + data
+            self._send_pending.clear()
+        try:
+            self._sock.sendall(data)
+        except BlockingIOError:
+            self._send_pending += data
+
+    def _on_lease_timeout(self):
+        self.warnings.append(
+            f"lease expired after {self.lease_seconds}s with no renewal; "
+            "session purged, awaiting re-announce")
+        self.log_event("lease expired: session purged")
+        self._reset_session()
 
     def pump(self):
         """Read available bytes, decode KLV, dispatch each request and send
@@ -559,15 +664,42 @@ class CspClient:
         are synchronous (6.3): one response per request, in order."""
         if self._sock is None:
             raise RuntimeError("not connected; call connect() first")
+        self._send(b"")  # flush any backpressured response bytes first
+        if self._send_pending:
+            return 0  # still blocked; don't take requests we can't answer
+        count = 0
         try:
             data = self._sock.recv(65536)
         except BlockingIOError:
-            return 0
-        if not data:
+            data = None
+        if data:
+            try:
+                self._reader.feed(data)
+                messages = self._reader.messages()
+            except ValueError as e:
+                # Unparseable framing: the next message boundary is lost, so
+                # the stream cannot resync. Drop the connection; the DCS
+                # reconnects and re-announces.
+                self.warnings.append(
+                    f"malformed KLV framing ({e}); connection dropped")
+                self._close()
+                raise ConnectionError(f"malformed KLV framing: {e}")
+            with self._lock:
+                for key, value in messages:
+                    try:
+                        resp = self.handle_wire(key, value)
+                    except Exception as e:
+                        # One bad handler must not kill the pump loop: answer
+                        # Bad Request (7.1) and keep the session alive.
+                        self.warnings.append(
+                            f"handler failed ({e}); answering Bad Request")
+                        resp = self._bad_request(
+                            key, value, f"internal error: {e}"[:200])
+                    self._send(resp)
+                    count += 1
+        elif data is not None:  # b"" is a clean FIN
+            self._close()
             raise ConnectionError("DCS closed the connection")
-        self._reader.feed(data)
-        count = 0
-        for key, value in self._reader.messages():
-            self._sock.sendall(self.handle_wire(key, value))
-            count += 1
+        if self.lease_expired():
+            self._on_lease_timeout()
         return count

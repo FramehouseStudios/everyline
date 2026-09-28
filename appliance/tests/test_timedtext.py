@@ -61,5 +61,43 @@ class TestDetect(unittest.TestCase):
             parse_timed_text("<Nope/>")
 
 
+class TestRobustness(unittest.TestCase):
+    def test_one_bad_cue_does_not_kill_track(self):
+        xml = """<SubtitleReel EditRate="24">
+          <Subtitle TimeIn="00:00:01:00" TimeOut="00:00:02:00">
+            <Text>good</Text></Subtitle>
+          <Subtitle TimeIn="bogus" TimeOut="00:00:04:00">
+            <Text>bad</Text></Subtitle>
+          <Subtitle TimeIn="00:00:05:00" TimeOut="00:00:06:00">
+            <Text>also good</Text></Subtitle>
+        </SubtitleReel>"""
+        w = []
+        cues = parse_4287(xml, "en", w)
+        self.assertEqual([c.text for c in cues], ["good", "also good"])
+        self.assertTrue(any("malformed cue" in x for x in w))
+
+    def test_one_bad_cinecanvas_cue_skipped(self):
+        xml = """<DCSubtitle>
+          <Subtitle SpotNumber="1" TimeIn="250" TimeOut="750">
+            <Text>good</Text></Subtitle>
+          <Subtitle SpotNumber="2" TimeIn="zzz" TimeOut="999">
+            <Text>bad</Text></Subtitle>
+        </DCSubtitle>"""
+        w = []
+        cues = parse_timed_text(xml, "es", w)
+        self.assertEqual(len(cues), 1)
+        self.assertTrue(any("malformed cue" in x for x in w))
+
+    def test_entity_declaration_refused(self):
+        xml = """<?xml version="1.0"?>
+        <!DOCTYPE lolz [<!ENTITY lol "lollollol">]>
+        <SubtitleReel EditRate="24">
+          <Subtitle TimeIn="00:00:01:00" TimeOut="00:00:02:00">
+            <Text>&lol;</Text></Subtitle>
+        </SubtitleReel>"""
+        with self.assertRaises(ValueError):
+            parse_timed_text(xml, "en")
+
+
 if __name__ == "__main__":
     unittest.main()

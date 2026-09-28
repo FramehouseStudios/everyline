@@ -11,7 +11,7 @@ import time
 import unittest
 import urllib.request
 
-from appliance.csp import CspClient
+from appliance.csp import CspClient, STATUS
 from appliance.scheduler import CueScheduler
 from appliance.sim_dcs import SimDcs
 
@@ -81,20 +81,28 @@ class TestLoopback(unittest.TestCase):
         steps = [
             ("announce",),
             ("get_new_lease",),
-            ("set_rpl_location", 424242),
+            # Annex B: the RPL fetch runs async; the DCS sees Processing,
+            # then polls Get Status until the load lands.
+            ("set_rpl_location", 424242, STATUS["processing"]),
+            ("poll_until_ready",),
             ("set_output_mode", True),
             ("update_timeline", 424242, 24),  # 24 units @24fps = 1000 ms
         ]
         client, sim = self._run(steps)
 
-        # Every ACS response: Request ID echoed, status success, in order.
+        # Every scripted ACS response: Request ID echoed (asserted per
+        # request by the sim), statuses in order.
+        scripted = [r for r in sim.responses if r[0] != "get_status_resp"]
+        self.assertEqual([r[2] for r in scripted],
+                         [0, 0, STATUS["processing"], 0, 0])
         self.assertEqual(
-            [(r[1], r[2]) for r in sim.responses],
-            [(1, 0), (2, 0), (3, 0), (4, 0), (5, 0)])
-        self.assertEqual(
-            [r[0] for r in sim.responses],
+            [r[0] for r in scripted],
             ["announce_resp", "get_new_lease_resp", "set_rpl_location_resp",
              "set_output_mode_resp", "update_timeline_resp"])
+        # The Annex B poll watched Processing turn into ready.
+        polls = [r for r in sim.responses if r[0] == "get_status_resp"]
+        self.assertTrue(polls, "expected Get Status polls")
+        self.assertNotIn("fetching", polls[-1][3])
 
         # Session state landed where the wire said it should.
         self.assertEqual(client.lease_seconds, 30)
@@ -116,7 +124,8 @@ class TestLoopback(unittest.TestCase):
         steps = [
             ("announce",),
             ("get_new_lease",),
-            ("set_rpl_location", 424242),
+            ("set_rpl_location", 424242, STATUS["processing"]),
+            ("poll_until_ready",),
             ("terminate_lease",),
         ]
         client, sim = self._run(steps)
@@ -130,7 +139,8 @@ class TestLoopback(unittest.TestCase):
         steps = [
             ("announce",),
             ("get_new_lease",),
-            ("set_rpl_location", 424242),
+            ("set_rpl_location", 424242, STATUS["processing"]),
+            ("poll_until_ready",),
             ("update_timeline", 999, 100, 24, 1, 5),  # expect mismatch
         ]
         client, sim = self._run(steps)
@@ -154,13 +164,19 @@ class TestLoopback(unittest.TestCase):
         steps = [
             ("announce",),
             ("get_new_lease",),
-            ("set_rpl_location", 424242, 8),  # RPL says 999: expect rpl_error
+            # The ACS answers Processing immediately; the mismatch surfaces
+            # when the background fetch lands (state=empty).
+            ("set_rpl_location", 424242, STATUS["processing"]),
+            ("poll_until_ready",),
         ]
         client, sim = self._run(steps, template=rpl_template("999"))
-        name, _, code, text = sim.responses[-1]
-        self.assertEqual(name, "set_rpl_location_resp")
-        self.assertEqual(code, 8)  # rpl_error
+        rpl_resps = [r for r in sim.responses
+                     if r[0] == "set_rpl_location_resp"]
+        self.assertEqual(len(rpl_resps), 1)
+        self.assertEqual(rpl_resps[0][2], STATUS["processing"])
+        self.assertEqual(client.state, "empty")
         self.assertEqual(client.cues_by_lang, {})
+        self.assertTrue(any("PlayoutID" in w for w in client.warnings))
 
 
 if __name__ == "__main__":
