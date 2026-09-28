@@ -4,6 +4,10 @@ node_modules/
 # Licensed standard PDFs: research material only, never commit.
 research/vendor/*.pdf
 
+# Meta Wearables DAT SDK: proprietary reference copy, never redistribute.
+# Developers: download it from the Meta Wearables developer portal.
+research/vendor/meta-wearables-dat-ios/
+
 __pycache__/
 *.pyc
 research/vendor/st0430-*.txt
