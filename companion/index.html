@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>everyline</title>
+<meta name="theme-color" content="#000000">
+<meta name="description" content="Live movie captions on your glasses.">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<main id="screen-join" class="screen active">
+  <div class="join-card">
+    <h1>everyline</h1>
+    <p class="tagline">Every line of the film, in your lens.</p>
+    <label>Backend
+      <input id="backend-url" inputmode="url" placeholder="https://backend.example.com" autocomplete="off">
+    </label>
+    <label>Theater ID
+      <input id="theater-id" placeholder="from your ticket or the QR at your seat" autocomplete="off">
+    </label>
+    <label>Operator token
+      <input id="operator-token" type="password" placeholder="temporary in v1" autocomplete="off">
+    </label>
+    <button id="find-btn">Find showtimes</button>
+    <p id="join-error" class="error" role="alert"></p>
+    <p class="muted">In the theater? Scan the QR at your seat — it fills this in.</p>
+  </div>
+</main>
+
+<main id="screen-auditoriums" class="screen">
+  <div class="join-card">
+    <h2 id="aud-theater-name"></h2>
+    <div id="aud-list"></div>
+    <button id="back-btn" class="ghost">Back</button>
+  </div>
+</main>
+
+<main id="screen-live" class="screen">
+  <div id="lens">
+    <div class="status-line" aria-live="polite"></div>
+    <div class="cue-wrap"><p class="cue-text"></p></div>
+    <div class="live-bar">
+      <div class="lang-row" role="group" aria-label="Caption language"></div>
+      <button id="leave-btn" class="ghost">Leave</button>
+    </div>
+  </div>
+</main>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

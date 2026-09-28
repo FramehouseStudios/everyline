@@ -1,0 +1,174 @@
+/* everyline companion: theater-dark, built for glanceability. Pure black
+   so the phone doesn't spill light in the auditorium. */
+
+:root {
+  --ink: #f5f5f5;
+  --dim: #8a8a8a;
+  --accent: #ffd60a;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #000;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  min-height: 100dvh;
+}
+
+.screen { display: none; min-height: 100dvh; }
+.screen.active { display: flex; }
+
+/* ---- join ---- */
+
+#screen-join.active, #screen-auditoriums.active {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.join-card { width: 100%; max-width: 380px; }
+
+.join-card h1 {
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.join-card h2 { font-size: 1.4rem; margin: 0 0 16px; }
+
+.tagline { color: var(--dim); margin: 0 0 24px; }
+
+.join-card label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--dim);
+  margin-bottom: 12px;
+}
+
+.join-card input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 12px;
+  font-size: 1rem;
+  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  color: var(--ink);
+}
+
+.join-card input:focus { outline: none; border-color: var(--accent); }
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 12px;
+  padding: 14px 18px;
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+  width: 100%;
+  margin-top: 8px;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid #2a2a2a;
+  width: auto;
+  padding: 10px 16px;
+}
+
+button:disabled { opacity: 0.35; cursor: default; }
+
+.error { color: #ff6b6b; min-height: 1.2em; font-size: 0.9rem; }
+.muted { color: var(--dim); font-size: 0.85rem; }
+
+/* ---- auditoriums ---- */
+
+#aud-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+
+.aud-card {
+  background: #111;
+  color: var(--ink);
+  border: 1px solid #2a2a2a;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 400;
+}
+
+.aud-card strong { font-size: 1.05rem; }
+.aud-card span { color: var(--dim); font-size: 0.9rem; }
+.aud-card em { font-style: normal; font-size: 0.8rem; color: var(--accent); }
+.aud-card:disabled em { color: var(--dim); }
+
+/* ---- live / lens ---- */
+
+#screen-live.active { align-items: stretch; }
+
+#lens {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+}
+
+.status-line {
+  padding: 12px 4px;
+  font-size: 0.8rem;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  min-height: 2.4em;
+}
+
+.status-line.warn { color: var(--accent); }
+
+.cue-wrap {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 8vh;
+}
+
+.cue-text {
+  margin: 0;
+  width: 100%;
+  text-align: center;
+  font-size: clamp(1.9rem, 7vw, 3.4rem);
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  opacity: 0;
+  transition: opacity 120ms ease-in;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.9);
+}
+
+.cue-text.visible { opacity: 1; }
+
+.live-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 4px;
+}
+
+.lang-row { display: flex; gap: 8px; }
+
+.lang-row button {
+  width: auto;
+  margin: 0;
+  padding: 8px 14px;
+  background: #1a1a1a;
+  color: var(--dim);
+  font-size: 0.85rem;
+}
+
+.lang-row button.active { background: var(--accent); color: #000; }

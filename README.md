@@ -36,6 +36,11 @@ The theater keeps its projector. The patron keeps their dignity.
   KLV framing, RPL and timed-text parsers, cue scheduler emitting the Cue
   Stream Protocol. Pure Python, 37 tests. Wire bytes marked SPEC are
   paywalled and get filled from the licensed standard before bench testing.
+- `companion/` — the patron phone app (PWA): join via discovery, subscribe
+  to the booth's cue stream, and render captions. The booth is the clock;
+  the renderer is the seam where the Meta Wearables Display SDK plugs in.
+  `npm install && npm test` (13 tests), verified end-to-end against the
+  demo booth.
 
 ## The honest version
 
