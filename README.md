@@ -32,6 +32,10 @@ The theater keeps its projector. The patron keeps their dignity.
 - `backend/` — the control plane: theaters, auditoriums, booth appliances,
   shows, and patron discovery. The cue stream stays on the LAN; the backend
   never touches caption content. `npm install && npm test`.
+- `appliance/` — the booth box software: SMPTE 430-10/430-11 client skeleton,
+  KLV framing, RPL and timed-text parsers, cue scheduler emitting the Cue
+  Stream Protocol. Pure Python, 37 tests. Wire bytes marked SPEC are
+  paywalled and get filled from the licensed standard before bench testing.
 
 ## The honest version
 

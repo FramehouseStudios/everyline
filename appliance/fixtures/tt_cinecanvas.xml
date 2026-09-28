@@ -1,0 +1,10 @@
+<DCSubtitle Version="1.0">
+  <!-- SYNTHETIC FIXTURE for parser tests. Not from any real DCP.
+       CineCanvas times are ticks (1 tick = 4 ms) unless timecoded. -->
+  <Subtitle SpotNumber="1" TimeIn="250" TimeOut="750">
+    <Text>¿Oíste eso?</Text>
+  </Subtitle>
+  <Subtitle SpotNumber="2" TimeIn="00:00:04:00" TimeOut="00:00:06:00">
+    <Text>La sala se rió.</Text>
+  </Subtitle>
+</DCSubtitle>

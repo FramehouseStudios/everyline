@@ -46,3 +46,4 @@ Plan B (room-audio transcription) stays as the fallback mode for unequipped thea
 - 2026-09-28: booth-to-lens demo working (simulated booth, cue protocol v0, EN/ES tracks, lens-view client). Verified: cue lead time, pause freeze, seek, language switch.
 - 2026-09-28: backend control plane built (Node/Express/SQLite): theaters, auditoriums, appliance registration + heartbeat, shows, patron discovery. 9/9 tests green. Caption content never touches the backend; cue stream stays on LAN.
 - Next: production booth appliance (real SMPTE 430-10 client; needs paywalled spec docs + bench time on a real cinema server), Meta Wearables companion app.
+- 2026-09-28: booth appliance core built (Python, stdlib only): KLV framing per ST 336, CSP session skeleton (message flow from USL notes; wire bytes SPEC-gated on licensed 430-10), RPL parser with field-quirk defenses, ST 428-7 + CineCanvas timed-text parsers, cue scheduler emitting protocol v0. 37/37 tests green.

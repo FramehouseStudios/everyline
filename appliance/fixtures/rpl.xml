@@ -1,0 +1,21 @@
+<AuxiliaryResourcePresentationList xmlns="http://www.smpte-ra.org/schemas/430-11/2010/RPL">
+  <!-- SYNTHETIC FIXTURE. Element names are best-effort from the public 430-11
+       sample; conform against the licensed standard before bench testing. -->
+  <TimelineOffset>0</TimelineOffset>
+  <ReelResources>
+    <ReelResource Language="en">
+      <ResourceFile>http://dcs.local/captions/feature_en.xml</ResourceFile>
+      <EntryPoint>0</EntryPoint>
+      <Duration>5400000</Duration>
+    </ReelResource>
+    <ReelResource Language="English">
+      <ResourceFile>http://dcs.local/captions/feature_en2.xml</ResourceFile>
+    </ReelResource>
+    <ReelResource Language="es">
+      <ResourceFile>http://dcs.local/captions/feature_es.xml</ResourceFile>
+    </ReelResource>
+    <ReelResource Language="fr">
+      <!-- no ResourceFile: must be skipped with a warning, not crash -->
+    </ReelResource>
+  </ReelResources>
+</AuxiliaryResourcePresentationList>

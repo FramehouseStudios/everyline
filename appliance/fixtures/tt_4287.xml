@@ -1,0 +1,10 @@
+<SubtitleReel xmlns="http://www.smptera.org/schemas/428-7/2014/DCST" EditRate="24">
+  <!-- SYNTHETIC FIXTURE for parser tests. Not from any real DCP. -->
+  <Subtitle SpotNumber="1" TimeIn="00:00:01:00" TimeOut="00:00:03:12">
+    <Text>Did you hear that?</Text>
+  </Subtitle>
+  <Subtitle SpotNumber="2" TimeIn="00:00:04:00" TimeOut="00:00:06:00">
+    <Text>The room laughed.</Text>
+    <Text>Everyone laughed together.</Text>
+  </Subtitle>
+</SubtitleReel>
