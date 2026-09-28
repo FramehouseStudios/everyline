@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lens View · Glasses Captions Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: #060607; color: #f5f5f4; font-family: -apple-system, Helvetica, Arial, sans-serif; }
+  .tabs { display: flex; gap: 8px; padding: 12px 16px 0; }
+  .tabs button { flex: 1; padding: 10px; border-radius: 12px; border: 1px solid #2a2a2e;
+    background: #131316; color: #a1a1aa; font-size: 15px; }
+  .tabs button.active { background: #f5f5f4; color: #060607; border-color: #f5f5f4; font-weight: 600; }
+  .view { display: none; padding: 12px 16px 24px; }
+  .view.active { display: block; }
+
+  /* ---- patron / lens view ---- */
+  .lens { position: relative; border-radius: 20px; overflow: hidden; background: #000;
+    aspect-ratio: 16/10; border: 1px solid #26262b; }
+  .lens video, .lens .placeholder { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .lens .placeholder { display: flex; align-items: center; justify-content: center;
+    color: #52525b; font-size: 14px; letter-spacing: .12em; }
+  .caption { position: absolute; left: 8%; right: 8%; bottom: 9%; text-align: center;
+    font-size: clamp(20px, 4.6vw, 30px); line-height: 1.35; font-weight: 600;
+    color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.9), 0 1px 3px rgba(0,0,0,.9);
+    opacity: 0; transition: opacity .18s ease; white-space: pre-line; }
+  .caption.on { opacity: 1; }
+  .hud { display: flex; justify-content: space-between; align-items: center; margin: 10px 2px; font-size: 13px; color: #a1a1aa; }
+  .hud .sync { font-variant-numeric: tabular-nums; }
+  .hud .sync b { color: #4ade80; font-weight: 600; }
+  .badge { display: inline-block; font-size: 11px; letter-spacing: .1em; padding: 4px 10px;
+    border-radius: 999px; border: 1px solid #3f3f46; color: #d4d4d8; }
+  .langrow { display: flex; gap: 8px; margin-top: 12px; }
+  .langrow button { flex: 1; padding: 12px; border-radius: 12px; font-size: 16px;
+    border: 1px solid #2a2a2e; background: #131316; color: #e4e4e7; }
+  .langrow button.active { background: #f5f5f4; color: #060607; font-weight: 700; }
+  .paused-chip { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,.65); border: 1px solid #3f3f46; padding: 6px 14px;
+    border-radius: 999px; font-size: 12px; letter-spacing: .14em; display: none; }
+  .paused-chip.on { display: block; }
+
+  /* ---- booth view ---- */
+  .transport { display: flex; gap: 8px; margin: 4px 0 12px; }
+  .transport button { flex: 1; padding: 12px 4px; border-radius: 12px; font-size: 15px;
+    border: 1px solid #2a2a2e; background: #131316; color: #e4e4e7; }
+  .transport button.primary { background: #f5f5f4; color: #060607; font-weight: 700; }
+  .timeline { position: relative; height: 44px; background: #131316; border-radius: 12px;
+    border: 1px solid #26262b; margin-bottom: 12px; cursor: pointer; }
+  .timeline .tick { position: absolute; top: 10px; bottom: 10px; width: 3px; border-radius: 2px;
+    background: #52525b; transform: translateX(-50%); }
+  .timeline .playhead { position: absolute; top: 4px; bottom: 4px; width: 2px; background: #f5f5f4; }
+  .log { background: #0c0c0e; border: 1px solid #1f1f23; border-radius: 12px; padding: 10px 12px;
+    height: 220px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; color: #a1a1aa; }
+  .log div { padding: 2px 0; border-bottom: 1px solid #141416; }
+  .meta { font-size: 13px; color: #71717a; margin: 10px 2px; }
+</style>
+</head>
+<body>
+
+<div class="tabs">
+  <button id="tabPatron" class="active">Patron view</button>
+  <button id="tabBooth">Booth</button>
+</div>
+
+<!-- PATRON -->
+<div class="view active" id="viewPatron">
+  <div class="lens">
+    <video id="film" src="trailer.mp4" playsinline muted preload="auto"></video>
+    <div class="placeholder" id="noVideo" style="display:none">NO PICTURE · CAPTIONS ONLY</div>
+    <div class="paused-chip" id="pausedChip">PAUSED</div>
+    <div class="caption" id="caption"></div>
+  </div>
+  <div class="hud">
+    <span class="badge">LENS VIEW · SIMULATED</span>
+    <span class="sync">sync <b id="syncMs">—</b></span>
+    <span id="timecode" style="font-variant-numeric:tabular-nums">00:00.0</span>
+  </div>
+  <div class="langrow" id="langRow"></div>
+  <div class="meta" id="showingLine">connecting to booth…</div>
+</div>
+
+<!-- BOOTH -->
+<div class="view" id="viewBooth">
+  <div class="transport">
+    <button id="btnPlay" class="primary">Play</button>
+    <button id="btnPause">Pause</button>
+    <button id="btnBack">−10s</button>
+    <button id="btnFwd">+10s</button>
+    <button id="btnRestart">Restart</button>
+  </div>
+  <div class="timeline" id="timeline"></div>
+  <div class="meta" id="boothMeta">booth simulator · source: local caption file (production: DCP via cinema server)</div>
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.hostname}:8765`);
+let lang = 'en', languages = ['en'];
+let transport = { status: 'paused', positionMs: 0, at: performance.now() };
+let scheduled = [];
+let durationMs = 92000;
+
+const $ = id => document.getElementById(id);
+const captionEl = $('caption'), syncEl = $('syncMs'), tcEl = $('timecode');
+
+function log(msg) {
+  const el = $('log'), d = document.createElement('div');
+  d.textContent = `${new Date().toLocaleTimeString()}  ${msg}`;
+  el.prepend(d);
+  while (el.children.length > 80) el.lastChild.remove();
+}
+
+function mediaNow() {
+  return transport.status === 'playing'
+    ? transport.positionMs + (performance.now() - transport.at)
+    : transport.positionMs;
+}
+
+function fmt(ms) {
+  const s = Math.max(0, ms / 1000), m = Math.floor(s / 60);
+  return `${String(m).padStart(2,'0')}:${(s % 60).toFixed(1).padStart(4,'0')}`;
+}
+
+function clearScheduled() { scheduled.forEach(clearTimeout); scheduled = []; }
+
+function showCue(cue) {
+  captionEl.textContent = cue.text;
+  captionEl.classList.add('on');
+  const err = Math.round(mediaNow() - cue.startMs);
+  syncEl.textContent = (err >= 0 ? '+' : '') + err + ' ms';
+  const hideIn = Math.max(0, cue.endMs - mediaNow());
+  scheduled.push(setTimeout(() => captionEl.classList.remove('on'), hideIn));
+}
+
+function onCue(cue) {
+  const delay = cue.startMs - mediaNow();
+  if (delay <= 0) {
+    if (mediaNow() < cue.endMs) showCue(cue);   // arrived late but still live
+    return;
+  }
+  scheduled.push(setTimeout(() => showCue(cue), delay));
+}
+
+/* ---- video follows the booth clock (illustrative) ---- */
+const video = $('film');
+video.addEventListener('error', () => { video.style.display = 'none'; $('noVideo').style.display = 'flex'; }, true);
+function syncVideo() {
+  const pos = mediaNow();
+  if (Math.abs(video.currentTime * 1000 - pos) > 600 && isFinite(video.duration)) {
+    try { video.currentTime = Math.min(pos / 1000, video.duration - 0.2); } catch (e) {}
+  }
+  if (transport.status === 'playing') video.play().catch(() => {});
+  else video.pause();
+}
+
+/* ---- transport + timeline ---- */
+function onTransport(t) {
+  const was = transport.status;
+  transport = { status: t.status, positionMs: t.positionMs, at: performance.now() };
+  if (t.status === 'paused' && was === 'playing') { clearScheduled(); captionEl.classList.remove('on'); }
+  $('pausedChip').classList.toggle('on', t.status === 'paused');
+  $('btnPlay').classList.toggle('primary', t.status !== 'playing');
+  $('boothMeta').textContent =
+    `booth simulator · ${t.status} · ${fmt(t.positionMs)} · ${t.clients} patron(s) connected · source: local caption file (production: DCP via cinema server)`;
+  syncVideo();
+}
+setInterval(() => {
+  tcEl.textContent = fmt(mediaNow());
+  const ph = document.querySelector('.playhead');
+  if (ph && durationMs) ph.style.left = (mediaNow() / durationMs * 100) + '%';
+}, 200);
+
+function buildTimeline(cues) {
+  const tl = $('timeline'); tl.innerHTML = '';
+  durationMs = Math.max(...cues.map(c => c.endMs), 92000);
+  cues.forEach(c => {
+    const tick = document.createElement('div');
+    tick.className = 'tick';
+    tick.style.left = (c.startMs / durationMs * 100) + '%';
+    tl.appendChild(tick);
+  });
+  const ph = document.createElement('div');
+  ph.className = 'playhead'; tl.appendChild(ph);
+  tl.onclick = e => {
+    const r = tl.getBoundingClientRect();
+    const pos = Math.round((e.clientX - r.left) / r.width * durationMs);
+    ws.send(JSON.stringify({ type: 'command', command: 'seek', positionMs: pos }));
+  };
+}
+
+/* ---- wiring ---- */
+ws.onopen = () => { ws.send(JSON.stringify({ type: 'hello', client: 'glasses-view', protocol: 0 })); };
+ws.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'welcome') {
+    languages = m.languages;
+    $('showingLine').textContent = `${m.showing.title} · ${m.showing.auditorium} · booth source: ${m.source}`;
+    const row = $('langRow'); row.innerHTML = '';
+    languages.forEach(l => {
+      const b = document.createElement('button');
+      b.textContent = l === 'en' ? 'English' : l === 'es' ? 'Español' : l;
+      b.className = l === lang ? 'active' : '';
+      b.onclick = () => {
+        lang = l; clearScheduled(); captionEl.classList.remove('on');
+        [...row.children].forEach(x => x.classList.remove('active')); b.classList.add('active');
+        ws.send(JSON.stringify({ type: 'subscribe', lang: l }));
+        log(`subscribed [${l}]`);
+      };
+      row.appendChild(b);
+    });
+    ws.send(JSON.stringify({ type: 'subscribe', lang }));
+    log(`welcome: ${m.showing.title} (${languages.join(', ')})`);
+  }
+  else if (m.type === 'transport') onTransport(m);
+  else if (m.type === 'cue') {
+    if (m.lang !== lang) return;
+    onCue(m);
+    if ($('viewBooth').classList.contains('active')) log(`cue ${m.id} → "${m.text.split('\n')[0]}"`);
+  }
+};
+ws.onclose = () => { $('showingLine').textContent = 'disconnected from booth — restart booth.py'; };
+
+$('btnPlay').onclick  = () => ws.send(JSON.stringify({ type: 'command', command: 'play' }));
+$('btnPause').onclick = () => ws.send(JSON.stringify({ type: 'command', command: 'pause' }));
+$('btnRestart').onclick = () => ws.send(JSON.stringify({ type: 'command', command: 'seek', positionMs: 0 }));
+$('btnBack').onclick  = () => ws.send(JSON.stringify({ type: 'command', command: 'seek', positionMs: Math.max(0, mediaNow() - 10000) }));
+$('btnFwd').onclick   = () => ws.send(JSON.stringify({ type: 'command', command: 'seek', positionMs: mediaNow() + 10000 }));
+
+$('tabPatron').onclick = () => {
+  $('tabPatron').classList.add('active'); $('tabBooth').classList.remove('active');
+  $('viewPatron').classList.add('active'); $('viewBooth').classList.remove('active');
+};
+$('tabBooth').onclick = () => {
+  $('tabBooth').classList.add('active'); $('tabPatron').classList.remove('active');
+  $('viewBooth').classList.add('active'); $('viewPatron').classList.remove('active');
+};
+
+// demo cue layout for the timeline (mirrors captions.en.srt)
+fetch('captions.en.srt').then(r => r.text()).then(t => {
+  const cues = [];
+  t.trim().split(/\n\s*\n/).forEach(b => {
+    const lines = b.trim().split('\n');
+    const m = lines[1] && lines[1].match(/(\d+):(\d+):(\d+),(\d+)\s*-->/);
+    if (m) cues.push({ startMs: ((+m[1]*60 + +m[2])*60 + +m[3])*1000 + +m[4], endMs: 0 });
+  });
+  buildTimeline(cues.map((c, i) => ({ startMs: c.startMs, endMs: c.startMs + 3000 })));
+});
+</script>
+</body>
+</html>
