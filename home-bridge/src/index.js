@@ -7,7 +7,14 @@ const { app, cueServer } = createApp();
 const server = http.createServer(app);
 
 import { WebSocketServer } from 'ws';
-const wss = new WebSocketServer({ server, path: '/cue' });
+const wss = new WebSocketServer({
+  server,
+  path: '/cue',
+  // Cue-protocol messages are tiny. The ws default (100 MB) lets one
+  // malicious or buggy client force a huge buffer alloc before it is
+  // closed.
+  maxPayload: 64 * 1024,
+});
 cueServer.attach(wss);
 
 server.listen(PORT, () => {

@@ -165,3 +165,116 @@ test('seat QR page renders with a QR code', async () => {
   const missing = await fetch(`${base}/v1/public/auditoriums/nope/join`);
   assert.equal(missing.status, 404);
 });
+
+test('cors headers are present on public endpoints', async () => {
+  const r = await fetch(`${base}/v1/public/now-playing?theaterId=${theaterId}&auditoriumId=${auditoriumId}`);
+  assert.equal(r.headers.get('access-control-allow-origin'), '*');
+  assert.equal(r.status, 200);
+});
+
+test('shows validate startsAt', async () => {
+  const bad = await call(`/v1/auditoriums/${auditoriumId}/shows`,
+    op({ title: 'Bad Time', startsAt: 'not-a-date' }));
+  assert.equal(bad.status, 400);
+  assert.match(bad.json.error, /startsAt/i);
+
+  const nonString = await call(`/v1/auditoriums/${auditoriumId}/shows`,
+    op({ title: 'Bad Time', startsAt: 12345 }));
+  assert.equal(nonString.status, 400);
+
+  const dated = await call(`/v1/auditoriums/${auditoriumId}/shows`,
+    op({ title: 'Dated', startsAt: '2030-01-01T19:00:00Z' }));
+  assert.equal(dated.status, 201);
+  assert.equal(dated.json.startsAt, '2030-01-01T19:00:00Z');
+});
+
+test('future shows are not current; past shows are', async () => {
+  const a = await call(`/v1/theaters/${theaterId}/auditoriums`, op({ name: 'Auditorium 2' }));
+  assert.equal(a.status, 201);
+  const aud2 = a.json.id;
+
+  const future = await call(`/v1/auditoriums/${aud2}/shows`,
+    op({ title: 'Tomorrow', startsAt: new Date(Date.now() + 86400000).toISOString() }));
+  assert.equal(future.status, 201);
+
+  let np = await call(`/v1/public/now-playing?theaterId=${theaterId}&auditoriumId=${aud2}`);
+  assert.equal(np.status, 200);
+  assert.equal(np.json.currentShow, null);
+  assert.equal(np.json.captionsAvailable, false);
+
+  const past = await call(`/v1/auditoriums/${aud2}/shows`,
+    op({ title: 'Tonight', startsAt: new Date(Date.now() - 3600000).toISOString() }));
+  assert.equal(past.status, 201);
+
+  np = await call(`/v1/public/now-playing?theaterId=${theaterId}&auditoriumId=${aud2}`);
+  assert.equal(np.json.currentShow.title, 'Tonight');
+});
+
+test('heartbeat rejects a non-ws cue stream url', async () => {
+  const bad = await call('/v1/appliances/heartbeat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({ cueStreamUrl: 'http://evil.example/x' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.json.error, /ws/i);
+
+  const noHost = await call('/v1/appliances/heartbeat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({ cueStreamUrl: 'ws://' }),
+  });
+  assert.equal(noHost.status, 400);
+
+  const good = await call('/v1/appliances/heartbeat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({ cueStreamUrl: 'wss://booth.lan:8443/cue' }),
+  });
+  assert.equal(good.status, 200);
+});
+
+test('poisoned host header cannot reach the seat qr', async () => {
+  const http = require('http');
+  const port = server.address().port;
+  const get = (host) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port,
+      path: `/v1/public/auditoriums/${auditoriumId}/join`, headers: { Host: host } },
+      (res) => {
+        let b = '';
+        res.on('data', (c) => { b += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body: b }));
+      });
+    req.on('error', reject);
+    req.end();
+  });
+
+  const poisoned = await get('evil.com/x');
+  assert.equal(poisoned.status, 500);
+  assert.match(poisoned.body, /PUBLIC_BACKEND_URL/);
+  assert.ok(!poisoned.body.includes('evil.com'));
+
+  process.env.PUBLIC_BACKEND_URL = 'https://backend.example.com';
+  try {
+    // The deep link is encoded in the QR modules, not page text; the
+    // observable property is that the poisoned host never reaches the
+    // page while the configured backend wins.
+    const ok = await get('evil.com');
+    assert.equal(ok.status, 200);
+    assert.ok(!ok.body.includes('evil.com'));
+  } finally {
+    delete process.env.PUBLIC_BACKEND_URL;
+  }
+});
+
+// Keep last: it burns through the per-IP QR budget (30/min).
+test('join endpoint is rate limited', async () => {
+  const statuses = [];
+  for (let i = 0; i < 31; i++) {
+    const r = await fetch(`${base}/v1/public/auditoriums/${auditoriumId}/join`);
+    statuses.push(r.status);
+    await r.text();
+  }
+  assert.equal(statuses[0], 200);
+  assert.ok(statuses.includes(429), `expected some 429s, got ${statuses.join(',')}`);
+});

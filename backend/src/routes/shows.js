@@ -25,6 +25,18 @@ module.exports = (db) => {
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'title is required' });
     }
+    // starts_at is stored as opaque text and ordered lexicographically
+    // (the now-playing query relies on it), so only valid ISO-8601 or
+    // null may be written. Garbage strings would silently corrupt the
+    // current-show ordering.
+    let starts_at = startsAt;
+    if (starts_at != null) {
+      if (typeof starts_at !== 'string' || Number.isNaN(Date.parse(starts_at))) {
+        return res.status(400).json({ error: 'startsAt must be a valid ISO-8601 datetime or null' });
+      }
+    } else {
+      starts_at = null;
+    }
     if (!Array.isArray(languages) || languages.length === 0 ||
         !languages.every((l) => typeof l === 'string' && l.trim())) {
       return res.status(400).json({ error: 'languages must be a non-empty array of strings' });
@@ -33,7 +45,7 @@ module.exports = (db) => {
       id: crypto.randomUUID(),
       auditorium_id: req.params.auditoriumId,
       title: title.trim(),
-      starts_at: startsAt,
+      starts_at,
       languages: JSON.stringify(languages),
       created_at: now(),
     };

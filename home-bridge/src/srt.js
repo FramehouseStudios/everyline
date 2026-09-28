@@ -11,8 +11,10 @@ const STAMP =
   /(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/;
 
 export function parseSrt(text) {
+  // A BOM'd file's first line looks like "\uFEFF1", fails the index
+  // check, and the whole first cue is silently dropped. Strip it.
   const cues = [];
-  const blocks = String(text).replace(/\r/g, '').split(/\n\s*\n/);
+  const blocks = String(text).replace(/^\uFEFF/, '').replace(/\r/g, '').split(/\n\s*\n/);
   let n = 0;
   for (const block of blocks) {
     const lines = block.trim().split('\n');

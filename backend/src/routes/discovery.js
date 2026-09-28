@@ -13,6 +13,7 @@ module.exports = (db) => {
   const r = Router();
   const currentShow = db.prepare(`
     SELECT * FROM shows WHERE auditorium_id = ?
+      AND (starts_at IS NULL OR starts_at <= ?)
     ORDER BY starts_at IS NULL, starts_at DESC, created_at DESC LIMIT 1`);
   const applianceFor = db.prepare('SELECT * FROM appliances WHERE auditorium_id = ?');
 
@@ -28,7 +29,7 @@ module.exports = (db) => {
     res.json({
       theater: { id: theater.id, name: theater.name, chain: theater.chain, city: theater.city },
       auditoriums: auditoriums.map((a) => {
-        const s = currentShow.get(a.id);
+        const s = currentShow.get(a.id, new Date().toISOString());
         const ap = applianceFor.get(a.id);
         const lastSeenMs = ap && ap.last_seen_at ? Date.parse(ap.last_seen_at) : 0;
         const reachable = Date.now() - lastSeenMs < REACHABLE_MS;

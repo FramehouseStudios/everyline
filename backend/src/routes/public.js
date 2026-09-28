@@ -17,12 +17,42 @@ const QRCode = require('qrcode');
 
 const REACHABLE_MS = 120000; // appliance seen within the last 2 minutes
 
+// The QR render is CPU-heavy and unauthenticated. Bound it per IP so the
+// endpoint cannot be hammered. Staff open this page on a tablet or print
+// it, so a strict budget is fine.
+const qrHits = new Map(); // ip -> { count, resetAt }
+const QR_LIMIT = 30;
+const QR_WINDOW_MS = 60 * 1000;
+
+function qrRateLimit(req, res, next) {
+  const ip = req.ip || 'unknown';
+  const nowMs = Date.now();
+  let e = qrHits.get(ip);
+  if (!e || nowMs >= e.resetAt) {
+    e = { count: 0, resetAt: nowMs + QR_WINDOW_MS };
+    qrHits.set(ip, e);
+  }
+  e.count += 1;
+  if (e.count > QR_LIMIT) {
+    return res.status(429).json({ error: 'too many requests' });
+  }
+  next();
+}
+
 function backendBase(req) {
   if (process.env.PUBLIC_BACKEND_URL) {
     return process.env.PUBLIC_BACKEND_URL.replace(/\/+$/, '');
   }
+  // Fallback: build from the request. The Host header is attacker
+  // controlled, so validate it tightly: a poisoned Host here puts an
+  // attacker's backend URL into printed seat QR codes, and scanning
+  // patrons then connect to it. In production, set PUBLIC_BACKEND_URL.
+  const host = req.get('host') || '';
+  if (!/^[A-Za-z0-9.\-:\[\]]+$/.test(host)) {
+    throw new Error('cannot determine backend URL from request; set PUBLIC_BACKEND_URL');
+  }
   const proto = req.get('x-forwarded-proto') || req.protocol;
-  return `${proto}://${req.get('host')}`;
+  return `${proto}://${host}`;
 }
 
 function companionBase() {
@@ -32,8 +62,14 @@ function companionBase() {
 module.exports = (db) => {
   const r = Router();
 
+  // "Current" means started but not listed for the future: without the
+  // time window, a 9pm show listed at 7pm (or yesterday's show, forever)
+  // reports as current and the seat QR claims "Captions live".
+  // starts_at is ISO-8601 text (validated on write), so lexicographic
+  // comparison is chronological.
   const currentShow = db.prepare(`
     SELECT * FROM shows WHERE auditorium_id = ?
+      AND (starts_at IS NULL OR starts_at <= ?)
     ORDER BY starts_at IS NULL, starts_at DESC, created_at DESC LIMIT 1`);
   const applianceFor = db.prepare('SELECT * FROM appliances WHERE auditorium_id = ?');
 
@@ -43,7 +79,7 @@ module.exports = (db) => {
     const aud = db.prepare(
       'SELECT * FROM auditoriums WHERE id = ? AND theater_id = ?').get(auditoriumId, theaterId);
     if (!aud) return { error: 'auditorium not found', status: 404 };
-    const s = currentShow.get(aud.id);
+    const s = currentShow.get(aud.id, new Date().toISOString());
     const ap = applianceFor.get(aud.id);
     const lastSeenMs = ap && ap.last_seen_at ? Date.parse(ap.last_seen_at) : 0;
     const reachable = Date.now() - lastSeenMs < REACHABLE_MS;
@@ -71,15 +107,21 @@ module.exports = (db) => {
     res.json(out);
   });
 
-  r.get('/v1/public/auditoriums/:auditoriumId/join', async (req, res) => {
+  r.get('/v1/public/auditoriums/:auditoriumId/join', qrRateLimit, async (req, res) => {
     const aud = db.prepare('SELECT * FROM auditoriums WHERE id = ?').get(req.params.auditoriumId);
     if (!aud) return res.status(404).json({ error: 'auditorium not found' });
     const out = nowPlaying(aud.theater_id, aud.id);
     if (out.error) return res.status(out.status).json({ error: out.error });
 
+    let base;
+    try {
+      base = backendBase(req);
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
     const deep = new URLSearchParams({
       source: 'theater',
-      backend: backendBase(req),
+      backend: base,
       theater: out.theater.id,
       auditorium: out.auditorium.id,
     });

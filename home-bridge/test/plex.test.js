@@ -113,3 +113,50 @@ test('plex: non-SRT subtitle stream raises honestly', async () => {
     server.close();
   }
 });
+
+test('a vanished session reports paused at the last known position, not 0:00', async () => {
+  let sessions = [{
+    key: '/library/metadata/42',
+    grandparentTitle: 'The Long Room',
+    title: 'The Long Room',
+    Player: { state: 'playing' },
+    viewOffset: 61000,
+    duration: 90000,
+  }];
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    res.setHeader('Content-Type', 'application/json');
+    if (url.pathname === '/status/sessions') {
+      res.end(JSON.stringify({ MediaContainer: { Metadata: sessions } }));
+    } else if (url.pathname === '/library/metadata/42') {
+      res.end(JSON.stringify({ MediaContainer: { Metadata: [{
+        key: '/library/metadata/42',
+        grandparentTitle: 'The Long Room',
+        title: 'The Long Room',
+        Media: [{ Part: [{ Stream: [
+          { streamType: 3, languageCode: 'eng', codec: 'srt', key: '/library/streams/7' },
+        ] }] }],
+      }] } }));
+    } else if (url.pathname === '/library/streams/7') {
+      res.setHeader('Content-Type', 'text/plain');
+      res.end('1\n00:00:01,000 --> 00:01:02,000\nhello\n');
+    } else {
+      res.statusCode = 404;
+      res.end('{}');
+    }
+  });
+  await new Promise((r) => server.listen(0, r));
+  const plexUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const plex = new PlexMedia({ url: plexUrl, token: 'tok' });
+    const session = await plex.attach('/library/metadata/42');
+    let st = await session.state();
+    assert.equal(st.positionMs, 61000);
+    sessions = []; // the session ends
+    st = await session.state();
+    assert.equal(st.status, 'paused');
+    assert.equal(st.positionMs, 61000);
+  } finally {
+    server.close();
+  }
+});

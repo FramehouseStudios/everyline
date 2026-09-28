@@ -33,11 +33,14 @@ export class PlexMedia {
     // Canonical auth: X-Plex-Token header (server.py:155-160). Plex also
     // accepts ?X-Plex-Token= in the URL, but URL-embedded tokens leak into
     // server and proxy logs, so we never put it there.
+    // Bounded: a Plex that accepts and never answers must not wedge the
+    // bridge (every 250 ms tick awaits this).
     return this.fetch(`${this.url}${path}`, {
       headers: {
         Accept: 'application/json',
         'X-Plex-Token': this.token,
       },
+      signal: AbortSignal.timeout(5000),
     });
   }
 
@@ -90,6 +93,7 @@ class PlexSession {
     this.title = meta.grandparentTitle || meta.title || 'Plex';
     this.streams = streams;
     this.cache = new Map(); // lang -> cues
+    this.lastPositionMs = 0;
   }
 
   languages() {
@@ -106,7 +110,7 @@ class PlexSession {
     const cues = parseSrt(text);
     if (!cues.length) {
       throw new Error(
-        `plex: subtitle stream for [${lang}] is not SRT-shaped (codec ${stream.codec}); text-based SRT/VTT only in v1`);
+        `plex: subtitle stream for [${lang}] is not SRT-shaped (codec ${stream.codec}); text-based SRT only in v1`);
     }
     this.cache.set(lang, cues);
     return cues;
@@ -115,7 +119,10 @@ class PlexSession {
   async state() {
     const sessions = await this.client.sessions();
     const s = sessions.find((x) => x.key === this.metadataKey);
-    if (!s) return { status: 'paused', positionMs: 0 };
+    // Session gone (ended/closed): report paused at the last known
+    // position, not 0:00 — the phone UI would otherwise jump to the start.
+    if (!s) return { status: 'paused', positionMs: this.lastPositionMs };
+    this.lastPositionMs = s.positionMs;
     return {
       status: s.state === 'playing' ? 'playing' : 'paused',
       positionMs: s.positionMs,

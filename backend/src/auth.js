@@ -4,6 +4,7 @@
 // - Booth appliances: per-device API key in X-Api-Key, only heartbeat + status.
 // Caption content never passes through here; the cue stream stays on the LAN.
 
+const crypto = require('node:crypto');
 const { hashKey } = require('./db');
 
 function operatorToken() {
@@ -12,7 +13,12 @@ function operatorToken() {
 
 function operatorAuth(req, res, next) {
   const got = (req.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-  if (!got || got !== operatorToken()) {
+  const want = operatorToken();
+  const a = Buffer.from(got);
+  const b = Buffer.from(want);
+  // timingSafeEqual throws on length mismatch; the length check first is
+  // the standard guard (it leaks length only, not content).
+  if (!got || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
     return res.status(401).json({ error: 'unauthorized' });
   }
   next();

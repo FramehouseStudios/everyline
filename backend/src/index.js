@@ -12,6 +12,18 @@ function createApp({ dbPath } = {}) {
   const app = express();
   app.use(express.json({ limit: '256kb' }));
 
+  // The companion PWA calls /v1/public/* and /v1/discovery cross-origin
+  // (the seat QR encodes a backend URL that differs from the PWA origin).
+  // Without these headers every real browser blocks the flagship
+  // scan -> join -> live captions loop with a CORS error.
+  app.use((req, res, next) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Api-Key');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
   app.get('/v1/health', (req, res) => res.json({
     ok: true, version: '0.1.0', time: new Date().toISOString(),
   }));
@@ -36,7 +48,9 @@ function createApp({ dbPath } = {}) {
 if (require.main === module) {
   const port = process.env.PORT || 3000;
   if (!process.env.OPERATOR_TOKEN) {
-    console.warn('[everyline] OPERATOR_TOKEN not set, using dev default (do not use in production)');
+    // Fail closed: the dev default must never guard a real deployment.
+    console.error('[everyline] refusing to start: OPERATOR_TOKEN is not set');
+    process.exit(1);
   }
   const { app } = createApp();
   app.listen(port, () => console.log(`[everyline] backend listening on :${port}`));

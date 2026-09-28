@@ -38,3 +38,10 @@ fine
   assert.deepEqual(cues.map((c) => c.text), ['Hello world', 'fine']);
   assert.equal(cues[1].startMs, 10000);
 });
+
+test('strips a UTF-8 BOM instead of dropping the first cue', () => {
+  const cues = parseSrt('\uFEFF1\n00:00:01,000 --> 00:00:02,000\nfirst\n\n2\n00:00:05,000 --> 00:00:06,000\nsecond\n');
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].text, 'first');
+  assert.equal(cues[0].id, 'cue-0');
+});

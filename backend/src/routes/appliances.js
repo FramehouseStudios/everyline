@@ -7,6 +7,25 @@ const { operatorAuth, applianceAuth } = require('../auth');
 // One appliance per auditorium in v1. The API key is shown exactly once,
 // at registration; only its hash is stored.
 
+// The cue stream URL is handed to patron phones, which open a WebSocket
+// to it. Only accept ws(s) URLs with a real host: a leaked key or a
+// misconfigured box must not be able to point every patron at an
+// attacker's socket for caption injection.
+function validCueStreamUrl(u) {
+  if (u == null) return null;
+  const s = String(u);
+  let parsed;
+  try {
+    parsed = new URL(s);
+  } catch {
+    throw new Error('cueStreamUrl must be a valid URL');
+  }
+  if (!['ws:', 'wss:'].includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error('cueStreamUrl must be a ws:// or wss:// URL with a host');
+  }
+  return s;
+}
+
 const publicAppliance = (a) => ({
   id: a.id,
   auditoriumId: a.auditorium_id,
@@ -40,20 +59,36 @@ module.exports = (db) => {
       last_seen_at: null,
       created_at: now(),
     };
-    db.prepare(`INSERT INTO appliances
-      (id, auditorium_id, label, api_key_hash, status, version, cue_stream_url, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(ap.id, ap.auditorium_id, ap.label, ap.api_key_hash, ap.status,
-        ap.version, ap.cue_stream_url, ap.last_seen_at, ap.created_at);
+    try {
+      db.prepare(`INSERT INTO appliances
+        (id, auditorium_id, label, api_key_hash, status, version, cue_stream_url, last_seen_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(ap.id, ap.auditorium_id, ap.label, ap.api_key_hash, ap.status,
+          ap.version, ap.cue_stream_url, ap.last_seen_at, ap.created_at);
+    } catch (e) {
+      // Two concurrent registrations can both pass the check above; the
+      // UNIQUE(auditorium_id) constraint is the real guard. Answer 409,
+      // not 500, when it fires.
+      if (e && e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        return res.status(409).json({ error: 'an appliance is already registered for this auditorium' });
+      }
+      throw e;
+    }
     res.status(201).json({ appliance: publicAppliance(ap), apiKey });
   });
 
   r.post('/v1/appliances/heartbeat', applianceAuth(db), (req, res) => {
     const { status = 'ok', version = null, cueStreamUrl = null } = req.body || {};
+    let cueUrl;
+    try {
+      cueUrl = validCueStreamUrl(cueStreamUrl);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
     const seen = now();
     db.prepare(`UPDATE appliances
       SET status = ?, version = ?, cue_stream_url = ?, last_seen_at = ? WHERE id = ?`)
-      .run(String(status), version, cueStreamUrl, seen, req.appliance.id);
+      .run(String(status), version, cueUrl, seen, req.appliance.id);
     res.json({ ok: true, lastSeenAt: seen });
   });
 

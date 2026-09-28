@@ -21,13 +21,18 @@ export function createApp() {
   const getMedia = () => media;
 
   app.get('/v1/status', async (req, res) => {
-    res.json({
-      source: 'home',
-      kind: mediaKind,
-      title: media.title,
-      languages: media.languages(),
-      media: await media.state(),
-    });
+    try {
+      res.json({
+        source: 'home',
+        kind: mediaKind,
+        title: media.title,
+        languages: media.languages(),
+        media: await media.state(),
+      });
+    } catch (e) {
+      // Plex down etc: JSON 502, not Express's default HTML 500.
+      res.status(502).json({ error: e.message });
+    }
   });
 
   // Manual provider: load an SRT track.
