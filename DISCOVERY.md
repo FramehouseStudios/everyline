@@ -41,3 +41,8 @@ Plan B (room-audio transcription) stays as the fallback mode for unequipped thea
 - Minimum viable pilot: single auditorium? single regional chain?
 - Business model: per-auditorium annual license (WatchWord model) vs alternatives.
 - Platform risk: Meta shipping this as a first-party accessibility feature.
+
+## Build log
+- 2026-09-28: booth-to-lens demo working (simulated booth, cue protocol v0, EN/ES tracks, lens-view client). Verified: cue lead time, pause freeze, seek, language switch.
+- 2026-09-28: backend control plane built (Node/Express/SQLite): theaters, auditoriums, appliance registration + heartbeat, shows, patron discovery. 9/9 tests green. Caption content never touches the backend; cue stream stays on LAN.
+- Next: production booth appliance (real SMPTE 430-10 client; needs paywalled spec docs + bench time on a real cinema server), Meta Wearables companion app.
