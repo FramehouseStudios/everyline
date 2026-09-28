@@ -39,3 +39,7 @@ dual-homed for booth LAN and patron WiFi) and the Meta Wearables companion
 app are the next builds, gated on a pilot exhibitor.
 
 Built by Framehouse Studios.
+
+## License
+
+MIT. See [LICENSE](LICENSE). If you build on this, we'd love to hear about it.
