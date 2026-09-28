@@ -13,6 +13,7 @@ import { WebRenderer } from './renderer.js';
 import { BoothStream } from './stream.js';
 import { DemoSource } from './source.js';
 import { parseSrt } from './srt.js';
+import { parseJoinParams, publicNowPlayingUrl } from './join.js';
 
 const $ = (sel) => document.querySelector(sel);
 const params = new URLSearchParams(location.search);
@@ -283,29 +284,58 @@ function init() {
   applyCapSize(store.get('capSize') || 'm');
 
   // Deep links.
-  const deepSource = params.get('source');
-  if (deepSource === 'demo') {
+  const qp = parseJoinParams(params);
+  if (qp.source === 'demo') {
     startDemo();
-  } else if (deepSource === 'home' && (params.get('bridge') || store.get('bridge'))) {
+  } else if (qp.source === 'home' && (qp.bridge || store.get('bridge'))) {
     selectMode('home');
-    connectHome(params.get('bridge') || store.get('bridge'));
-  } else if ($('#backend-url').value && params.get('theater') && params.get('auditorium')) {
-    (async () => {
-      try {
-        const res = await fetch(
-          `${backendBase()}/v1/discovery?theaterId=${encodeURIComponent($('#theater-id').value.trim())}`,
-          { headers: authHeaders() });
+    connectHome(qp.bridge || store.get('bridge'));
+  } else if (qp.backend && qp.theater && qp.auditorium) {
+    joinTheaterDeep(qp);
+  }
+}
+
+// Seat-QR deep link: ?source=theater&backend=&theater=&auditorium=.
+// Tokenless: the public now-playing endpoint needs no operator token, so a
+// printed QR never leaks a credential. A tokened link still works and gets
+// the operator discovery path.
+async function joinTheaterDeep(qp) {
+  if (qp.token) {
+    $('#backend-url').value = qp.backend;
+    $('#operator-token').value = qp.token;
+    $('#theater-id').value = qp.theater;
+    try {
+      const res = await fetch(
+        `${qp.backend}/v1/discovery?theaterId=${encodeURIComponent(qp.theater)}`,
+        { headers: { authorization: `Bearer ${qp.token}` } });
+      if (res.ok) {
         const d = await res.json();
-        const aud = d.auditoriums.find((a) => a.id === params.get('auditorium'));
+        const aud = d.auditoriums.find((a) => a.id === qp.auditorium);
         if (aud && aud.captionsAvailable) {
-          startLive({
+          return startLive({
             label: aud.currentShow?.title || aud.name,
             makeSource: (h) => new BoothStream({ wsImpl: WebSocket, handlers: h }),
             url: aud.cueStreamUrl,
           });
         }
-      } catch { /* fall through to the join screen */ }
-    })();
+      }
+    } catch { /* fall through to the public path */ }
+  }
+  try {
+    const res = await fetch(publicNowPlayingUrl(qp));
+    if (!res.ok) throw new Error(`backend answered ${res.status}`);
+    const d = await res.json();
+    if (!d.captionsAvailable || !d.cueStreamUrl) {
+      setJoinError(`Captions are not live in ${d.auditorium?.name || 'this auditorium'} yet.`);
+      return;
+    }
+    startLive({
+      label: d.currentShow?.title || d.auditorium.name,
+      makeSource: (h) => new BoothStream({ wsImpl: WebSocket, handlers: h }),
+      url: d.cueStreamUrl,
+    });
+  } catch {
+    setJoinError('Could not reach the theater. Check you are on the auditorium WiFi.');
   }
 }
 

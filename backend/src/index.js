@@ -21,6 +21,7 @@ function createApp({ dbPath } = {}) {
   app.use(require('./routes/appliances')(db));
   app.use(require('./routes/shows')(db));
   app.use(require('./routes/discovery')(db));
+  app.use(require('./routes/public')(db));
 
   app.use((req, res) => res.status(404).json({ error: 'not found' }));
   // eslint-disable-next-line no-unused-vars

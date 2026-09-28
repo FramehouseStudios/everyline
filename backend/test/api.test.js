@@ -136,3 +136,32 @@ test('unknown routes 404 as json', async () => {
   assert.equal(status, 404);
   assert.equal(json.error, 'not found');
 });
+
+test('public now-playing needs no token', async () => {
+  const r = await call(`/v1/public/now-playing?theaterId=${theaterId}&auditoriumId=${auditoriumId}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.theater.name, 'Roxie Theater');
+  assert.equal(r.json.auditorium.id, auditoriumId);
+  assert.equal(r.json.currentShow.title, 'The Long Room');
+  assert.equal(r.json.captionsAvailable, true);
+  assert.equal(r.json.cueStreamUrl, 'ws://10.0.1.10:8765');
+});
+
+test('public now-playing validation', async () => {
+  const bad = await call('/v1/public/now-playing');
+  assert.equal(bad.status, 400);
+  const missing = await call('/v1/public/now-playing?theaterId=nope&auditoriumId=nope');
+  assert.equal(missing.status, 404);
+});
+
+test('seat QR page renders with a QR code', async () => {
+  const res = await fetch(`${base}/v1/public/auditoriums/${auditoriumId}/join`);
+  const html = await res.text();
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type'), /text\/html/);
+  assert.ok(html.includes('Roxie Theater'));
+  assert.ok(html.includes('<svg'), 'expected an inline QR svg');
+
+  const missing = await fetch(`${base}/v1/public/auditoriums/nope/join`);
+  assert.equal(missing.status, 404);
+});

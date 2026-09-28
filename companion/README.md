@@ -14,14 +14,16 @@ python3 -m http.server 8000
 ```
 
 Open `http://<your-lan-ip>:8000`, enter the backend URL, a theater ID, and the
-operator token (v1 still gates discovery on the operator token; a public
-now-playing variant ships before pilot).
+operator token — or scan the seat QR, which needs no token.
 
 Deep link (what the seat QR encodes):
 
 ```
-?backend=https://…&token=…&theater=<theaterId>&auditorium=<auditoriumId>
+?source=theater&backend=https://…&theater=<theaterId>&auditorium=<auditoriumId>
 ```
+
+It hits the public now-playing endpoint, so the QR never carries a
+credential. A `token=` param still works and gets the operator path.
 
 ## Architecture
 
